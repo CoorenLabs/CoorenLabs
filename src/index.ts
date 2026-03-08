@@ -13,6 +13,7 @@ import { Logger } from "./core/logger";
 import { mappingRoutes } from "./core/mappingRoutes";
 import { proxyRoutes } from "./core/proxyRoutes";
 import { animeRoutes } from "./providers/anime/route";
+import { yFlixRoutes } from "./providers/yflix/route";
 import { mangaRoutes } from "./providers/manga/route";
 import { tidalRoutes } from "./providers/tidal/route";
 
@@ -56,6 +57,8 @@ app
     };
   })
   .use(animeRoutes)
+  .use(yFlixRoutes)
+  .use(animeRoutes)
   .use(mangaRoutes)
   .use(tidalRoutes)
   .use(proxyRoutes)
@@ -70,6 +73,7 @@ app
     return { status: 500, success: false, message: error.message || "Internal Server Error", data: null };
   });
 
+  
 app.listen(PORT);
 
 Logger.info(

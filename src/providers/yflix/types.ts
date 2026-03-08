@@ -115,7 +115,8 @@ export const SORT_OPTIONS = [
 export type MediaType = (typeof MEDIA_TYPES)[number];
 export type Quality = (typeof QUALITIES)[number];
 export type ReleaseYear = (typeof RELEASE_YEARS)[number];
-export type Genre = (typeof GENRES)[number];
+// export type Genre = (typeof GENRES)[number];
+export type Genre = string;
 export type Country = (typeof COUNTRIES)[number];
 export type SortOption = (typeof SORT_OPTIONS)[number];
 
@@ -129,11 +130,11 @@ export type FilterOptions = {
   sort?: SortOption;
 };
 
-export type ContentHero = {
+export type ContentFeatured = {
   id: string;
-  type: "movie"; // need to confirms, saw only movies on  hero section till now.
+  // type: "movie"; // need to confirm, ~~saw only movies on hero section till now~~.
   title: string;
-  synopsis: string;
+  description?: string;
   imdbRate: number;
   runtime: string;
   year: number;
@@ -147,7 +148,7 @@ export type MovieCard = {
   type: "movie";
   title: string;
   year: number;
-  runtime: string;
+  runtime?: string;
   quality: string;
 };
 
