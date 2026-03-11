@@ -1,10 +1,10 @@
-export const cf_capcha_status = [403, 503, 429]
+export const cf_captcha_status = [403, 503, 429];
 export const cf_signatures = [
-  'window._cf_chl_opt',             // Turnstile / JS Challenge config object
-  '<title>Just a moment...</title>', // Modern default challenge title
-  '<title>Attention Required! | Cloudflare</title>', // Legacy block title
-  'id="challenge-form"',            // Hidden form used for token submission
-  '__cf_chl_tk'                     // Token parameter in scripts/URLs
+  'window._cf_chl_opt',
+  '<title>Just a moment...</title>',
+  '<title>Attention Required! | Cloudflare</title>',
+  'id="challenge-form"',
+  '__cf_chl_tk'
 ];
 
 import { connect } from "puppeteer-real-browser";
@@ -21,17 +21,28 @@ interface ClearanceResult {
 
 const TIMEOUT = 15_000; 
 
-// Simple global variables to hold the warm browser and page
 let browserInstance: any = null;
 let pageInstance: any = null;
 
+// The Mutex Queue: Starts as an instantly resolved promise
+let bypassQueue: Promise<void> = Promise.resolve();
+
 export async function getCloudflareClearance(targetUrl: string): Promise<ClearanceResult> {
+  
+  // 1. ZERO-LATENCY QUEUE: Create a resolver for the current request
+  let releaseLock: () => void;
+  const nextInLine = new Promise<void>(resolve => { releaseLock = resolve; });
+  
+  // Capture the current end of the queue to wait for, then append ourselves to the end
+  const waitForPrevious = bypassQueue;
+  bypassQueue = bypassQueue.then(() => nextInLine);
+
+  // Wait for our turn. This resolves the exact microsecond the previous request calls releaseLock()
+  await waitForPrevious;
+
   try {
-    // 1. Cold start ONLY if the browser/page doesn't exist or somehow crashed
-    if (!browserInstance || !pageInstance || pageInstance.isClosed()) {
+    if (!browserInstance || !browserInstance.isConnected() || !pageInstance || pageInstance.isClosed()) {
       Logger.info("Cold start: Launching persistent browser...");
-      
-      // Cleanup just in case there's a zombie process
       if (browserInstance) await browserInstance.close().catch(() => {});
       
       const { browser, page } = await connect({
@@ -45,13 +56,10 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
       pageInstance = page;
     }
 
-    // 2. Just use the warm page to navigate directly
     Logger.info(`Navigating to ${targetUrl}...`);
     await pageInstance.goto(targetUrl, { waitUntil: 'domcontentloaded' });
 
-    Logger.info("Polling every 500ms for the cf_clearance cookie...");
-    
-    // 3. Extract the cookie and TTL
+    // 2. HIGH-FREQUENCY POLLING: 50ms instead of 500ms
     const extractionData = await new Promise<{ cookies: any[], cfClearance: string, userAgent: string, ttl: number }>((resolve, reject) => {
       // eslint-disable-next-line prefer-const
       let checkInterval: NodeJS.Timeout;
@@ -61,6 +69,7 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
         reject(new Error("Timeout: cf_clearance cookie never appeared."));
       }, TIMEOUT);
 
+      // 50ms is fast enough for near-instant detection, but slow enough to not lock the Node event loop
       checkInterval = setInterval(async () => {
         try {
           if (pageInstance.isClosed()) return;
@@ -69,6 +78,13 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
           const cfCookie = cookies.find((c: any) => c.name === 'cf_clearance');
           
           if (cfCookie) {
+            let userAgent = "";
+            try {
+              userAgent = await pageInstance.evaluate((): string => navigator.userAgent);
+            } catch (err) {
+              return; // Context destroyed, try again in 50ms
+            }
+
             clearInterval(checkInterval);
             clearTimeout(timeoutId);
             
@@ -78,8 +94,6 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
               ttlSeconds = Math.floor(cfCookie.expires) - currentUnixTime;
               if (ttlSeconds <= 0) ttlSeconds = 3600; 
             }
-            
-            const userAgent = await pageInstance.evaluate((): string => navigator.userAgent);
             
             resolve({ 
               cookies, 
@@ -91,13 +105,10 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
         } catch (err) {
           // Suppress rapid-reload context errors
         }
-      }, 500);
+      }, 50); // <-- Reduced from 500ms to 50ms
     });
 
-    Logger.info(`Got the cookie! TTL is ${extractionData.ttl} seconds. Leaving browser idle.`);
-
-    // NO FINALLY BLOCK. We don't close the tab or change the URL. 
-    // We just leave it exactly as-is so it's perfectly ready for the next run.
+    Logger.info(`Got the cookie! TTL is ${extractionData.ttl} seconds.`);
 
     return {
       success: true,
@@ -111,5 +122,8 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
     const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
     console.error("Failed to bypass:", errorMessage);
     return { success: false, error: errorMessage };
+  } finally {
+    // 3. INSTANT RELEASE: Unblock the next request in the queue immediately
+    releaseLock!(); 
   }
 }

@@ -1,6 +1,6 @@
 import { Cache } from "../cache";
 import { Logger } from "../logger";
-import { cf_capcha_status, cf_signatures, getCloudflareClearance } from "./cf-bypass";
+import { cf_captcha_status, cf_signatures, getCloudflareClearance } from "./cf-bypass";
 
 
 type FetchResponse = {
@@ -41,7 +41,7 @@ export const fetcher = async (input: string, detectCfCapcha: boolean, cachePrefi
     if (!res.ok) {
       Logger.warn("[primsrc] Failed to fetch url:", input, "\n", "Status:", status);
 
-      if (detectCfCapcha && cf_capcha_status.includes(status)) {
+      if (detectCfCapcha && cf_captcha_status.includes(status)) {
         const text = await res.text();
         if (!cf_signatures.some(sig => text.includes(sig))) {
           Logger.info("CF capcha not detected!")
