@@ -8,7 +8,7 @@ export const cf_signatures = [
 ];
 
 import { connect } from "puppeteer-real-browser";
-import { Logger } from "../../../core/logger";
+import { Logger } from "../logger";
 
 interface ClearanceResult {
   success: boolean;

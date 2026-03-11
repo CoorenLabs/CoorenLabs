@@ -15,19 +15,19 @@ export const primesrcRoutes = new Elysia({ prefix: `/${prefix}` })
         }
     })
     .get("/movie/:tmdbid", async ({ params: { tmdbid } }) => {
-        return await Primesrc.getMovieSource(tmdbid);
+        return await Primesrc.getMovieSource(+tmdbid);
     }, {
         params: t.Object({
-            tmdbid: t.Number()
+            tmdbid: t.Numeric()
         })
     })
-    .get("/movie/:tmdbid/:season/:episode", async ({ params: { tmdbid, season, episode } }) => {
-        return await Primesrc.getTvSource(tmdbid, season, episode);
+    .get("/tv/:tmdbid/:season/:episode", async ({ params: { tmdbid, season, episode } }) => {
+        return await Primesrc.getTvSource(+tmdbid, +season, +episode);
     }, {
         params: t.Object({
-            tmdbid: t.Number(),
-            season: t.Number(),
-            episode: t.Number()
+            tmdbid: t.Numeric(),
+            season: t.Numeric(),
+            episode: t.Numeric()
         })
     })
 

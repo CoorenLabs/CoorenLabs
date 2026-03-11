@@ -1,5 +1,5 @@
+import { fetcher } from "../../core/lib/fetcher";
 import { yflix } from "../origins";
-import { fetcher } from "./lib/fetcher";
 import { extractHomeData } from "./parser/home";
 import { extractSearchData } from "./parser/search";
 
@@ -7,7 +7,7 @@ export class yFlix {
   static async home() {
     const url = yflix + "/home";
 
-    const data = await fetcher(url, true);
+    const data = await fetcher(url, true, "yflix");
     if (!data || !data.text) return;
 
     return extractHomeData(data.text);
@@ -21,7 +21,7 @@ export class yFlix {
       + (page > 1 ? "&page=" + page : "")
       + (type ? "&type%5B%5D=" + type : "")
 
-    const data = await fetcher(url, true);
+    const data = await fetcher(url, true, "yflix");
 
     if (data && data.success) {
       const { success, status, text } = data;

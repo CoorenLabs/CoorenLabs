@@ -3,6 +3,7 @@
 //TODO add other server extractors
 
 import { Cache } from "../../core/cache";
+import { fetcher } from "../../core/lib/fetcher";
 import { Logger } from "../../core/logger";
 import { USER_AGENT } from "../anime/animepahe/scraper";
 import { extractPrimevid } from "./extractors/primevid";
@@ -45,7 +46,7 @@ export class Primesrc {
         };
 
         try {
-            const res = await fetch(url, { headers })
+            const res = await fetch(url, { headers });
             if (!res.ok) {
                 Logger.info(await res.text())
                 Logger.error("[primesrc]", "fetch err: failed to get avaiable servers from api");
@@ -70,14 +71,22 @@ export class Primesrc {
 
                 if (!supportedServers.includes(name)) continue
 
-                const res2 = await fetch(`${origin}/api/v1/l?key=${key}`, { headers })
+                // const res2 = await fetch(`${origin}/api/v1/l?key=${key}`, { headers }) // now gives capcha error
+                const _data = await fetcher(`${origin}/api/v1/l?key=${key}`, true, "primesrc", { headers })
 
-                if (!res2.ok) {
-                    Logger.error("[primesrc]", "failed to fetch for server: ", name);
+                if (!_data) {
+                    Logger.error("[primesrc]", "no data found from fetcher for server: ", name);
                     continue;
                 }
 
-                const { link } = await res2.json();
+                const { success, status, text } = _data
+                if (!success) {
+                    // console.log(await res2.text())
+                    Logger.error("[primesrc]", "failed to fetch for server: ", name, "status:", status);
+                    continue;
+                }
+
+                const { link } = JSON.parse(text);
                 if (!link) {
                     Logger.error("[primesrc]", "`link` field not found for server: ", name);
                     continue;
