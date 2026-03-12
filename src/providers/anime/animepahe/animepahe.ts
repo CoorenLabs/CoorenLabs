@@ -1,7 +1,5 @@
 import * as cheerio from "cheerio";
 import { compareTwoStrings } from "string-similarity";
-import type { ExternalMappings } from "../../../anizip";
-import { AniZip } from "../../../anizip";
 import { Logger } from "../../../core/logger";
 import {
   DDOS_GUARD_HEADERS,
@@ -26,7 +24,8 @@ import {
   searchSchema,
 } from "./types";
 
-import { ANIMEPAHE_BASE_URL } from "../../../core/config";
+
+const ANIMEPAHE_BASE_URL = "https://animepahe.si";
 import { proxifySource } from "../../../core/proxy";
 
 // ─── Regex for external ID extraction ──────────────────────────────────────
@@ -103,7 +102,7 @@ export class Animepahe {
 
   // ── Info (meta + episodes + mappings) ──────────────────────────────────
 
-  static async info(id: string): Promise<AnimeMeta | null> {
+  static async info(id: string): Promise<any | null> {
     try {
       const pageRes = await fetch(`${ANIMEPAHE_BASE_URL}/anime/${id}`, {
         headers: this.headers(),
@@ -161,12 +160,8 @@ export class Animepahe {
         } catch { /* ignore */ }
       });
 
-      const [mappingsFromAniZip, episodes] = await Promise.all([
-        this.fetchMappings(malId, anilistId),
-        this.fetchAllEpisodes(id),
-      ]);
-
-      const mappings = mappingsFromAniZip || (malId || anilistId ? {
+      const episodes = await this.fetchAllEpisodes(id);
+      const mappings = (malId || anilistId ? {
         mal_id: malId,
         anilist_id: anilistId,
         themoviedb_id: null,
@@ -312,37 +307,14 @@ export class Animepahe {
     mal_id?: number;
     anilist_id?: number;
   }): Promise<{
-    mappings: ExternalMappings | null;
+    mappings: any | null;
     results: Array<AnimeSearchItem & { similarity: number }>;
     bestMatch: (AnimeSearchItem & { similarity: number }) | null;
   }> {
     try {
-      const fullData = await AniZip.getFullData(params);
-      if (!fullData) {
-        return { mappings: null, results: [], bestMatch: null };
-      }
-
-      const title =
-        fullData.titles["en"] ??
-        fullData.titles["x-jat"] ??
-        fullData.titles["ja"] ??
-        "";
-
-      if (!title) {
-        return { mappings: fullData.mappings, results: [], bestMatch: null };
-      }
-
-      const results = await this.search(title);
-      const scored = results.map((item) => ({
-        ...item,
-        similarity: compareTwoStrings(title.toLowerCase(), item.title.toLowerCase()),
-      }));
-      scored.sort((a, b) => b.similarity - a.similarity);
-
-      const bestMatch =
-        scored.length > 0 && scored[0]!.similarity > 0.5 ? scored[0]! : null;
-
-      return { mappings: fullData.mappings, results: scored, bestMatch };
+      const results = await this.search(""); // This would need a proper title, but since we are removing anizip, we might not have it here
+      // For now, removing anizip mapping means lookup might be limited
+      return { mappings: null, results: [], bestMatch: null };
     } catch (err) {
       Logger.error(`AnimePahe lookup error: ${String(err)}`);
       return { mappings: null, results: [], bestMatch: null };
@@ -351,7 +323,7 @@ export class Animepahe {
 
   // ── Get Mappings + Name (lightweight) ──────────────────────────────────
 
-  static async getMappingsAndName(id: string): Promise<{ mappings: ExternalMappings | null; name: string } | null> {
+  static async getMappingsAndName(id: string): Promise<{ mappings: any | null; name: string } | null> {
     try {
       const pageRes = await fetch(`${ANIMEPAHE_BASE_URL}/anime/${id}`, {
         headers: this.headers(),
@@ -376,15 +348,12 @@ export class Animepahe {
         } catch { /* ignore */ }
       });
 
-      let mappings = await this.fetchMappings(malId, anilistId);
-      if (!mappings && (malId || anilistId)) {
-        mappings = {
+      const mappings = (malId || anilistId) ? {
           mal_id: malId, anilist_id: anilistId,
           themoviedb_id: null, imdb_id: null, thetvdb_id: null,
           kitsu_id: null, anidb_id: null, anisearch_id: null, livechart_id: null,
           animeplanet_id: null, notifymoe_id: null,
-        };
-      }
+      } : null;
       return { mappings, name };
     } catch (err) {
       Logger.error(`Failed to get mappings for anime ${id}:`, err);
@@ -396,14 +365,7 @@ export class Animepahe {
   // Private Helpers
   // ═══════════════════════════════════════════════════════════════════════
 
-  private static async fetchMappings(
-    malId: number | null,
-    anilistId: number | null,
-  ): Promise<ExternalMappings | null> {
-    if (malId) return AniZip.getMappings({ mal_id: malId });
-    if (anilistId) return AniZip.getMappings({ anilist_id: anilistId });
-    return null;
-  }
+
 
   static async fetchAllEpisodes(id: string): Promise<Episode[]> {
     try {

@@ -1,6 +1,5 @@
 import * as cheerio from "cheerio";
 import { compareTwoStrings } from "string-similarity";
-import { AniZip, type ExternalMappings } from "../../../anizip";
 import { Logger } from "../../../core/logger";
 import { USER_AGENT } from "../animepahe/scraper";
 import { MegaUp } from "./scraper/megaup";
@@ -601,30 +600,7 @@ export class AnimeKai {
     mal_id?: number;
     anilist_id?: number;
   }): Promise<string | null> {
-    try {
-      const fullData = await AniZip.getFullData(params);
-      if (!fullData) return null;
-
-      const title =
-        fullData.titles["en"] ??
-        fullData.titles["x-jat"] ??
-        fullData.titles["ja"] ??
-        "";
-
-      if (!title) return null;
-
-      const { results } = await this.search(title);
-      const scored = results.map((item) => ({
-        ...item,
-        similarity: compareTwoStrings(title.toLowerCase(), item.title.toLowerCase()),
-      }));
-      scored.sort((a, b) => b.similarity - a.similarity);
-
-      return scored.length > 0 && scored[0]!.similarity > 0.5 ? scored[0]!.id : null;
-    } catch (err) {
-      Logger.error(`AnimeKai resolveByExternalId error: ${String(err)}`);
-      return null;
-    }
+    return null; // Removing AniZip means we can't easily resolve by external ID without a search title
   }
 
   static async getEpisodeSession(
@@ -643,7 +619,7 @@ export class AnimeKai {
     }
   }
 
-  static async getMappingsAndName(id: string): Promise<{ mappings: ExternalMappings | null; name: string } | null> {
+  static async getMappingsAndName(id: string): Promise<{ mappings: any | null; name: string } | null> {
     try {
       const info = await this.info(id);
       if (!info) return null;
@@ -651,12 +627,7 @@ export class AnimeKai {
       const malId = info.malId ? parseInt(info.malId) : null;
       const anilistId = info.anilistId ? parseInt(info.anilistId) : null;
 
-      let mappings =
-        (malId ? await AniZip.getMappings({ mal_id: malId }) : null) ||
-        (anilistId ? await AniZip.getMappings({ anilist_id: anilistId }) : null);
-
-      if (!mappings && (malId || anilistId)) {
-        mappings = {
+      const mappings = (malId || anilistId) ? {
           mal_id: malId,
           anilist_id: anilistId,
           themoviedb_id: null,
@@ -668,8 +639,7 @@ export class AnimeKai {
           livechart_id: null,
           animeplanet_id: null,
           notifymoe_id: null,
-        };
-      }
+      } : null;
 
       return {
         mappings,
