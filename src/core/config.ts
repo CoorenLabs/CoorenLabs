@@ -14,8 +14,6 @@ export const REPO_URL = Bun.env.REPO_URL || "https://github.com/CoorenLabs/Coore
 export const CUSTOM_DOMAIN = Bun.env.CUSTOM_DOMAIN || "localhost:3000";
 
 // Provider Configuration
-export const ANIMEPAHE_BASE_URL = Bun.env.ANIMEPAHE_BASE_URL || "https://animepahe.si";
-
 // Logging Configuration
 export const LOG_LEVEL = Bun.env.LOG_LEVEL || "info";
 
