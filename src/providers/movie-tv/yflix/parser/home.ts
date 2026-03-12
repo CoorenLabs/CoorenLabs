@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { Logger } from "../../../core/logger";
+import { Logger } from "../../../../core/logger";
 import type { ContentFeatured, ContentTop10Card, Genre, MovieCard, TvCard } from "../types";
 
 type Slider = {

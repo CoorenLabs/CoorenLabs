@@ -1,8 +1,6 @@
 import { z } from "zod";
-import type { ExternalMappings } from "../../../anizip";
 
 // ─── Search API ─────────────────────────────────────────────────────────────
-
 export const searchSchema = z.object({
   data: z.array(
     z.object({
@@ -109,8 +107,6 @@ export interface AnimeMeta {
   duration: string;
   genres: string[];
   externalLinks: string[];
-  mappings: ExternalMappings | null;
-  episodes: Episode[];
 }
 
 // ─── Stream Results ────────────────────────────────────────────────────────
@@ -125,6 +121,5 @@ export interface StreamResult {
   type?: string;
   downloadUrl?: string | null;
   corsHeaders?: Record<string, string>;
-  mappings?: ExternalMappings | null;
   animeName?: string;
 }

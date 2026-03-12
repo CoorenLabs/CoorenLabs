@@ -26,12 +26,8 @@ import {
 
 
 import { animepahe as ANIMEPAHE_BASE_URL } from "../../origins";
-import { proxifySource } from "../../../core/proxy";
 
 // ─── Regex for external ID extraction ──────────────────────────────────────
-
-const MAL_ID_REGEX = /myanimelist\.net\/anime\/(\d+)/;
-const ANILIST_ID_REGEX = /anilist\.co\/anime\/(\d+)/;
 
 export class Animepahe {
   private static headers(): Record<string, string> {
@@ -102,7 +98,7 @@ export class Animepahe {
 
   // ── Info (meta + episodes + mappings) ──────────────────────────────────
 
-  static async info(id: string): Promise<any | null> {
+  static async info(id: string): Promise<AnimeMeta | null> {
     try {
       const pageRes = await fetch(`${ANIMEPAHE_BASE_URL}/anime/${id}`, {
         headers: this.headers(),
@@ -143,43 +139,21 @@ export class Animepahe {
         genres.push($(el).text().trim());
       });
 
-      let malId: number | null = null;
-      let anilistId: number | null = null;
       const externalLinks: string[] = [];
-
       $(".external-links a").each((_, el) => {
         const href = $(el).attr("href");
         if (!href) return;
         try {
           const url = new URL(href, ANIMEPAHE_BASE_URL).href;
           externalLinks.push(url);
-          const malMatch = MAL_ID_REGEX.exec(url);
-          if (malMatch?.[1]) malId = parseInt(malMatch[1], 10);
-          const anilistMatch = ANILIST_ID_REGEX.exec(url);
-          if (anilistMatch?.[1]) anilistId = parseInt(anilistMatch[1], 10);
         } catch { /* ignore */ }
       });
-
-      const episodes = await this.fetchAllEpisodes(id);
-      const mappings = (malId || anilistId ? {
-        mal_id: malId,
-        anilist_id: anilistId,
-        themoviedb_id: null,
-        imdb_id: null,
-        thetvdb_id: null,
-        kitsu_id: null,
-        anidb_id: null,
-        anisearch_id: null,
-        livechart_id: null,
-        animeplanet_id: null,
-        notifymoe_id: null,
-      } : null);
 
       return {
         id, name, description,
         poster: poster || null,
         background: background || null,
-        aired, duration, genres, externalLinks, mappings, episodes,
+        aired, duration, genres, externalLinks
       };
     } catch (err) {
       Logger.error(`AnimePahe info error: ${String(err)}`);
@@ -189,30 +163,27 @@ export class Animepahe {
 
   // ── Streams ────────────────────────────────────────────────────────────
 
-  static async streams(
+  static async *streams(
     animeId: string,
     episodeSession: string,
-  ): Promise<StreamResult[]> {
+  ): AsyncGenerator<StreamResult> {
     try {
-      const [animeData, res] = await Promise.all([
-        this.getMappingsAndName(animeId).catch(() => null),
+      const [animeName, res] = await Promise.all([
+        this.getAnimeName(animeId).catch(() => "Anime"),
         fetch(`${ANIMEPAHE_BASE_URL}/play/${animeId}/${episodeSession}`, {
           headers: this.headers(),
         })
       ]);
 
-      const animeTitle = animeData?.name || "Anime";
+      const animeTitle = animeName;
       const html = await res.text();
       const $ = cheerio.load(html);
 
       const buttons = $("div#resolutionMenu > button").toArray();
       const downloadLinks = $("div#pickDownload > a").toArray();
-      const results: StreamResult[] = [];
 
       const corsHeaders = {
-        // "Origin": "https://animepahe.si",
         "Referer": "https://kwik.cx/",
-        // "User-Agent": USER_AGENT,
       }
 
       // Try to find the episode number for the filename
@@ -228,102 +199,41 @@ export class Animepahe {
         const paheWinLink = $(downloadLinks[i]).attr("href") ?? "";
 
         if (kwikLink) {
-          const directUrl = await this.extractDirectUrl(kwikLink, paheWinLink);
-          if (!directUrl) continue;
+          try {
+            const directUrl = await this.extractDirectUrl(kwikLink, paheWinLink);
+            if (!directUrl) continue;
 
-          // Generate direct download URL (no tpahe) with filename
-          const downloadUrl = this.generateDownloadUrl(
-            directUrl,
-            animeTitle,
-            epNum,
-            audio,
-            quality
-          ) || paheWinLink || null;
+            const downloadUrl = this.generateDownloadUrl(
+              directUrl,
+              animeTitle,
+              epNum,
+              audio,
+              quality
+            ) || paheWinLink || null;
 
-          const result = {
-            id: `${animeId}--${quality}--${audio}`,
-            title: `${audio} / ${quality}p`,
-            url: kwikLink,
-            directUrl,
-            proxiedUrl: proxifySource(directUrl, corsHeaders),
-            quality,
-            audio,
-            downloadUrl,
-            corsHeaders
+            yield {
+              id: `${animeId}--${quality}--${audio}`,
+              title: `${audio} / ${quality}p`,
+              url: kwikLink,
+              directUrl,
+              quality,
+              audio,
+              downloadUrl,
+              corsHeaders
+            };
+          } catch (err) {
+            Logger.error(`Error extracting stream for ${quality}p ${audio}: ${String(err)}`);
           }
-
-          results.push(result);
         }
       }
-
-      results.sort((a, b) => parseInt(b.quality) - parseInt(a.quality));
-      Logger.info(`Found ${results.length} stream options for ${animeId}/${episodeSession}`);
-      return results;
     } catch (err) {
       Logger.error(`AnimePahe streams error: ${String(err)}`);
-      return [];
     }
   }
 
-  // ── Resolve external IDs → AnimePahe ID ────────────────────────────────
+  // ── Get Name (lightweight) ──────────────────────────────────────────
 
-  static async resolveByExternalId(params: {
-    mal_id?: number;
-    anilist_id?: number;
-  }): Promise<string | null> {
-    const lookupResult = await this.lookup(params);
-    if (lookupResult.bestMatch) {
-      Logger.info(`Resolved external ID to AnimePahe ID ${lookupResult.bestMatch.id}`);
-      return lookupResult.bestMatch.id;
-    }
-    Logger.warn(`Could not resolve external IDs to AnimePahe ID`);
-    return null;
-  }
-
-  // ── Get episode session by episode number ──────────────────────────────
-
-  static async getEpisodeSession(
-    animePaheId: string,
-    episodeNumber: number,
-  ): Promise<string | null> {
-    try {
-      const episodes = await this.fetchAllEpisodes(animePaheId);
-      const episode = episodes.find(ep => ep.episode === episodeNumber);
-      if (episode) {
-        Logger.info(`Found episode ${episodeNumber} session: ${episode.session}`);
-        return episode.session;
-      }
-      Logger.warn(`Episode ${episodeNumber} not found for anime ${animePaheId}`);
-      return null;
-    } catch (err) {
-      Logger.error(`Error getting episode session: ${String(err)}`);
-      return null;
-    }
-  }
-
-  // ── Lookup by external ID ──────────────────────────────────────────────
-
-  static async lookup(params: {
-    mal_id?: number;
-    anilist_id?: number;
-  }): Promise<{
-    mappings: any | null;
-    results: Array<AnimeSearchItem & { similarity: number }>;
-    bestMatch: (AnimeSearchItem & { similarity: number }) | null;
-  }> {
-    try {
-      const results = await this.search(""); // This would need a proper title, but since we are removing anizip, we might not have it here
-      // For now, removing anizip mapping means lookup might be limited
-      return { mappings: null, results: [], bestMatch: null };
-    } catch (err) {
-      Logger.error(`AnimePahe lookup error: ${String(err)}`);
-      return { mappings: null, results: [], bestMatch: null };
-    }
-  }
-
-  // ── Get Mappings + Name (lightweight) ──────────────────────────────────
-
-  static async getMappingsAndName(id: string): Promise<{ mappings: any | null; name: string } | null> {
+  static async getAnimeName(id: string): Promise<string> {
     try {
       const pageRes = await fetch(`${ANIMEPAHE_BASE_URL}/anime/${id}`, {
         headers: this.headers(),
@@ -331,33 +241,10 @@ export class Animepahe {
       const html = await pageRes.text();
       const $ = cheerio.load(html);
 
-      const name = $('span[style="user-select:text"]').text().trim() || "";
-
-      let malId: number | null = null;
-      let anilistId: number | null = null;
-
-      $(".external-links a").each((_, el) => {
-        const href = $(el).attr("href");
-        if (!href) return;
-        try {
-          const url = new URL(href, ANIMEPAHE_BASE_URL).href;
-          const malMatch = MAL_ID_REGEX.exec(url);
-          if (malMatch?.[1]) malId = parseInt(malMatch[1], 10);
-          const anilistMatch = ANILIST_ID_REGEX.exec(url);
-          if (anilistMatch?.[1]) anilistId = parseInt(anilistMatch[1], 10);
-        } catch { /* ignore */ }
-      });
-
-      const mappings = (malId || anilistId) ? {
-          mal_id: malId, anilist_id: anilistId,
-          themoviedb_id: null, imdb_id: null, thetvdb_id: null,
-          kitsu_id: null, anidb_id: null, anisearch_id: null, livechart_id: null,
-          animeplanet_id: null, notifymoe_id: null,
-      } : null;
-      return { mappings, name };
+      return $('span[style="user-select:text"]').text().trim() || "Anime";
     } catch (err) {
-      Logger.error(`Failed to get mappings for anime ${id}:`, err);
-      return null;
+      Logger.error(`Failed to get name for anime ${id}:`, err);
+      return "Anime";
     }
   }
 
