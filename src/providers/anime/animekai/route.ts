@@ -2,94 +2,130 @@ import { Elysia } from "elysia";
 import { AnimeKai } from "./animekai";
 
 export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
-  // Search
+
+  // ─── Search ────────────────────────────────────────────────────────────────
   .get("/search/:query", async ({ params: { query }, query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.search(query, page);
   })
 
-  // Spotlight
+  // ─── Spotlight ─────────────────────────────────────────────────────────────
   .get("/spotlight", async () => {
     return { results: await AnimeKai.spotlight() };
   })
 
-  // Schedule
-  .get("/schedule", async ({ query: qs }) => {
-    return { results: await AnimeKai.schedule(qs?.date as string) };
+  // ─── Schedule ──────────────────────────────────────────────────────────────
+  .get("/schedule/:date", async ({ params: { date } }) => {
+    return { results: await AnimeKai.schedule(date) };
   })
 
-  // Search Suggestions
+  // ─── Search Suggestions ────────────────────────────────────────────────────
   .get("/suggestions/:query", async ({ params: { query } }) => {
     return { results: await AnimeKai.suggestions(query) };
   })
 
-  // Recent Episodes (recently updated)
+  // ─── Recent Episodes (recently updated) ────────────────────────────────────
   .get("/recent-episodes", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.recentlyUpdated(page);
   })
 
-  // Recently Added
+  // ─── Recently Added ────────────────────────────────────────────────────────
   .get("/recent-added", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.recentlyAdded(page);
   })
 
-  // Latest Completed
+  // ─── Latest Completed ──────────────────────────────────────────────────────
   .get("/completed", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.latestCompleted(page);
   })
 
-  // New Releases
+  // ─── New Releases ──────────────────────────────────────────────────────────
   .get("/new-releases", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.newReleases(page);
   })
 
-  // Movies
+  // ─── Movies ────────────────────────────────────────────────────────────────
   .get("/movies", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.movies(page);
   })
 
-  // TV
+  // ─── TV ────────────────────────────────────────────────────────────────────
   .get("/tv", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.tv(page);
   })
 
-  // OVA
+  // ─── OVA ───────────────────────────────────────────────────────────────────
   .get("/ova", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.ova(page);
   })
 
-  // ONA
+  // ─── ONA ───────────────────────────────────────────────────────────────────
   .get("/ona", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.ona(page);
   })
 
-  // Specials
+  // ─── Specials ──────────────────────────────────────────────────────────────
   .get("/specials", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.specials(page);
   })
 
-  // Genre List
+  // ─── Genre List ────────────────────────────────────────────────────────────
   .get("/genres", async () => {
     return { results: await AnimeKai.genres() };
   })
 
-  // By Genre
+  // ─── By Genre ──────────────────────────────────────────────────────────────
   .get("/genre/:genre", async ({ params: { genre }, query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     return await AnimeKai.genreSearch(genre, page);
   })
 
-  // Episode Servers
-  .get("/servers/:episodeId", async ({ params: { episodeId }, query: qs }) => {
+  // ─── Anime Info ────────────────────────────────────────────────────────────
+  .get("/info", async ({ query: qs, set }) => {
+    const id = qs?.id as string | undefined;
+    if (!id) {
+      set.status = 400;
+      return { message: "id is required" };
+    }
+    const res = await AnimeKai.info(id);
+    if (!res) {
+      set.status = 404;
+      return { message: "Anime not found" };
+    }
+    return res;
+  })
+
+  // ─── Watch / Stream Sources ────────────────────────────────────────────────
+  .get("/watch/:episodeId", async ({ params: { episodeId }, query: qs, set }) => {
+    if (!episodeId) {
+      set.status = 400;
+      return { message: "episodeId is required" };
+    }
+    const dubParam = qs?.dub;
+    const subOrDub: "softsub" | "dub" =
+      dubParam === "true" || dubParam === "1" ? "dub" : "softsub";
+
+    // episodeId format: "animeSlug$ep=N$token=TOKEN"
+    const animeSlug = episodeId.split("$")[0] ?? episodeId;
+    const results = await AnimeKai.streams(animeSlug, episodeId, subOrDub);
+    return { results };
+  })
+
+  // ─── Episode Servers ───────────────────────────────────────────────────────
+  .get("/servers/:episodeId", async ({ params: { episodeId }, query: qs, set }) => {
+    if (!episodeId) {
+      set.status = 400;
+      return { message: "episodeId is required" };
+    }
     const dubParam = qs?.dub;
     const subOrDub: "softsub" | "dub" =
       dubParam === "true" || dubParam === "1" ? "dub" : "softsub";
