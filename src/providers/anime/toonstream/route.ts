@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
-import { Cache } from "../../core/cache";
-import { isTooLarge } from "../../core/helper";
-import { Logger } from "../../core/logger";
+import { Cache } from "../../../core/cache";
+import { isTooLarge } from "../../../core/helper";
+import { Logger } from "../../../core/logger";
 import { ScrapeHomePage } from "./scrapers/home";
 import { ScrapeMovieInfo, ScrapeMovies, ScrapeMovieSources } from "./scrapers/movie";
 import { ScrapeSearch } from "./scrapers/search";
@@ -42,9 +42,9 @@ const MAX_MP4_SIZE = 20 * 1024 * 1024 * 1024; // 20 GB
 // const PLAYLIST_REGEX = /\.m3u|playlist|\.txt/i
 const PLAYLIST_REGEX = /\.m3u|playlist|\.txt|^(?!.*\.(?:js|css|gif|jpg|png|svg|woff|woff2|ttf|ts|mp4|m4s|aac|key|vtt)(?:[?#].*)?$).*$/i;
 
-const prefix = "/toonstream";
+const prefix = "/anime/toonstream";
 
-export const toonstreamRoutes = new Elysia({ prefix })
+export const toonstreamRoutes = new Elysia({ prefix: "/toonstream" })
   .get("/", () => {
     return {
       name: "toonstream-api",

@@ -6,7 +6,6 @@ import {
     CORS_ORIGIN,
     OPENAPI_VERSION,
     PORT,
-    REPO_URL,
     validateConfig
 } from "./core/config";
 import { Logger } from "./core/logger";
@@ -16,7 +15,7 @@ import { animeRoutes } from "./providers/anime/route";
 import { mangaRoutes } from "./providers/manga/route";
 import { movieTvRoutes } from "./providers/movie-tv/route";
 import { musicRoutes } from "./providers/music/route";
-import { toonstreamRoutes } from "./providers/toonstream/route";
+
 
 validateConfig();
 
@@ -57,7 +56,7 @@ app
     return {
       name: "Cooren API",
       version: OPENAPI_VERSION,
-      repo: REPO_URL,
+      repo: "https://github.com/CoorenLabs/Cooren.git",
       environment: process.env.NODE_ENV || "development",
       about: "Cooren is a high-performance, scalable scraping engine designed to collect, organize, and deliver structured data from across the world of anime, movies, manga, and music, all in one unified ecosystem",
       status: "operational"
@@ -74,7 +73,7 @@ app
   .use(musicRoutes)
   .use(proxyRoutes)
   .use(mappingRoutes)
-  .use(toonstreamRoutes)
+
 
 
 app.listen(PORT);

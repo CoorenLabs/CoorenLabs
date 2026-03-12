@@ -7,9 +7,6 @@
 export const PORT = parseInt(Bun.env.PORT || "3000", 10);
 export const NODE_ENV = Bun.env.NODE_ENV || "development";
 
-// API Configuration  
-export const REPO_URL = Bun.env.REPO_URL || "https://github.com/CoorenLabs/Cooren.git";
-
 // Domain Masking Configuration
 export const CUSTOM_DOMAIN = Bun.env.CUSTOM_DOMAIN || "localhost:3000";
 

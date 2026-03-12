@@ -1,5 +1,5 @@
 
-import { SERVER_ORIGIN } from "../../../core/config";
+import { SERVER_ORIGIN } from "../../../../core/config";
 import { DirectSource } from "./types";
 
 
