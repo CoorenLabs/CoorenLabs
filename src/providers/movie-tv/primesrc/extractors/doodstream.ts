@@ -1,10 +1,9 @@
-import { fetcher } from "../../../core/lib/fetcher";
-import { Logger } from "../../../core/logger";
+import { fetcher } from "../../../../core/lib/fetcher";
+import { Logger } from "../../../../core/logger";
 import { ServerSource } from "../types";
 
 
-// const origin = "https://dood.watch";
-const origin = "https://myvidplay.com";
+import { doodstream as origin } from "../../../origins";
 
 const headers: Record<string, string> = {
     "Accept": "*/*",

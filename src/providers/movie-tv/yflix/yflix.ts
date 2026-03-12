@@ -1,5 +1,5 @@
-import { fetcher } from "../../core/lib/fetcher";
-import { yflix } from "../origins";
+import { fetcher } from "../../../core/lib/fetcher";
+import { yflix } from "../../origins";
 import { extractHomeData } from "./parser/home";
 import { extractSearchData } from "./parser/search";
 

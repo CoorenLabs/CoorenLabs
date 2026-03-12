@@ -3,14 +3,13 @@ import { Logger } from "../../../core/logger";
 
 // ─── Constants & CDNs ──────────────────────────────────────────────────────
 
-export const ALLMANGA_CDN_HOSTS = [
+const ALLMANGA_CDN_HOSTS = [
   "https://wp.youtube-anime.com/aln.youtube-anime.com", 
   "https://wp.youtube-anime.com",
   "https://aln.youtube-anime.com"
 ];
 
-const BASE_URL = "https://allmanga.to";
-const API_URL = "https://api.allanime.day/api";
+import { allmanga as BASE_URL, allmanga_api as API_URL } from "../../origins";
 
 const DEFAULT_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",

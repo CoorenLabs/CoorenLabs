@@ -7,7 +7,13 @@ export const MANGABALL_CDN_HOSTS = [
   "https://heracross.red-and-blue.net",
 ];
 
-const BASE_URL = "https://mangaball.net";
+const MANGABALL_CHAPTER_ORIGINS = [
+  "https://mangaball.net",
+  "https://bulbasaur.poke-black-and-white.net",
+  "https://heracross.red-and-blue.net",
+];
+
+import { mangaball as BASE_URL } from "../../origins";
 const BASE_API_TITLE = `${BASE_URL}/api/v1/title/search/`;
 const BASE_API_SEARCH = `${BASE_URL}/api/v1/title/search-advanced/`;
 const BASE_API_TAG = `${BASE_URL}/api/v1/tag/search/`;

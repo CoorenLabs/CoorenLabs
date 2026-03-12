@@ -1,22 +1,19 @@
 import { createDecipheriv } from "node:crypto";
-import { languageDictionary } from "../../../core/helper";
-import { Logger } from "../../../core/logger";
-import { USER_AGENT } from "../../anime/animepahe/scraper";
+import { languageDictionary } from "../../../../core/helper";
+import { Logger } from "../../../../core/logger";
+import { USER_AGENT } from "../../../anime/animepahe/scraper";
+import { primevid as baseUrl, primesrc as primesrcOriginUrl } from "../../../origins";
 import type { Caption, Source } from "../types";
 
 const algorithm = "aes-128-cbc";
-const key64 = "a2llbXRpZW5tdWE5MTFjYQ=="
-const iv64 = "MTIzNDU2Nzg5MG9pdXl0cg=="
-
-const baseUrl = "https://primevid.click"
+const key64 = "a2llbXRpZW5tdWE5MTFjYQ==";
+const iv64 = "MTIzNDU2Nzg5MG9pdXl0cg==";
 
 const corsHeaders: Record<string, string> = {
     "Referer": `${baseUrl}/`,
-    // "Referer": "https://primevid.click/",
 }
 
-
-const primesrc_origin = "primesrc.me"; // faking embed orign
+const primesrc_origin = new URL(primesrcOriginUrl).hostname;
 
 
 /**

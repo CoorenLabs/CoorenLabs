@@ -2,16 +2,15 @@
 // currently supports  `Primevid` and `Streamtape` Server, 
 //TODO add other server extractors
 
-import { Cache } from "../../core/cache";
-import { fetcher } from "../../core/lib/fetcher";
-import { Logger } from "../../core/logger";
-import { USER_AGENT } from "../anime/animepahe/scraper";
+import { Cache } from "../../../core/cache";
+import { fetcher } from "../../../core/lib/fetcher";
+import { Logger } from "../../../core/logger";
+import { USER_AGENT } from "../../anime/animepahe/scraper";
+import { primesrc as origin } from "../../origins";
 import { extractDoodstream } from "./extractors/doodstream";
 import { extractPrimevid } from "./extractors/primevid";
 import { extractStreamtape } from "./extractors/streamtape";
 import type { Response, ServerSource } from "./types";
-
-const origin = "https://primesrc.me"
 const cachePrefix = "primesrc:";
 
 const PRIMESRC_CACHE_FOUND_TLL = 3 * 3600; // 3hr

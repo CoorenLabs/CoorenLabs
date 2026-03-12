@@ -1,7 +1,8 @@
 import axios from "axios";
+import { tidal as tidalOrigin } from "../../origins";
 
 export class TidalAPI {
-    private readonly baseUrl = "https://api.tidal.com/v1";
+    private readonly baseUrl = tidalOrigin;
     private readonly countryCode = "US";
     private readonly token = "49YxDN9a2aFV6RTG";
 

@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import { compareTwoStrings } from "string-similarity";
 import { Logger } from "../../../core/logger";
+import { animekai as animekaiOrigin } from "../../origins";
 import { USER_AGENT } from "../animepahe/scraper";
 import { MegaUp } from "./scraper/megaup";
 import type {
@@ -12,7 +13,7 @@ import type {
 } from "./types";
 
 export class AnimeKai {
-  private static baseUrl = "https://anikai.to";
+  private static baseUrl = animekaiOrigin;
 
   private static headers(): Record<string, string> {
     return {

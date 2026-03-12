@@ -1,8 +1,6 @@
-import { Logger } from "../../../core/logger";
+import { Logger } from "../../../../core/logger";
+import { streamtape as origin } from "../../../origins";
 import type { Source } from "../types";
-
-
-const origin = "https://streamta.site";
 
 const headers: Record<string, string> = {
     "Accept": "*/*",

@@ -25,7 +25,7 @@ import {
 } from "./types";
 
 
-const ANIMEPAHE_BASE_URL = "https://animepahe.si";
+import { animepahe as ANIMEPAHE_BASE_URL } from "../../origins";
 import { proxifySource } from "../../../core/proxy";
 
 // ─── Regex for external ID extraction ──────────────────────────────────────

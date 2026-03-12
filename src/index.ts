@@ -14,10 +14,9 @@ import { mappingRoutes } from "./core/mappingRoutes";
 import { proxyRoutes } from "./core/proxyRoutes";
 import { animeRoutes } from "./providers/anime/route";
 import { mangaRoutes } from "./providers/manga/route";
-import { primesrcRoutes } from "./providers/primesrc/route";
-import { tidalRoutes } from "./providers/tidal/route";
+import { movieTvRoutes } from "./providers/movie-tv/route";
+import { musicRoutes } from "./providers/music/route";
 import { toonstreamRoutes } from "./providers/toonstream/route";
-import { yFlixRoutes } from "./providers/yflix/route";
 
 validateConfig();
 
@@ -69,11 +68,10 @@ app
       summary: 'System Status & API Overview' 
     }
   })
-  .use(yFlixRoutes)
-  .use(primesrcRoutes)
+  .use(movieTvRoutes)
   .use(animeRoutes)
   .use(mangaRoutes)
-  .use(tidalRoutes)
+  .use(musicRoutes)
   .use(proxyRoutes)
   .use(mappingRoutes)
   .use(toonstreamRoutes)
