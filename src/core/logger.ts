@@ -14,23 +14,23 @@ export class Logger {
         return `${this.colors.debug}[${time}]${this.colors.reset} ${color}[${level}]${this.colors.reset} ${message}`;
     }
 
-    public static info(message: string, ...args: any[]) {
+    public static info(message: any, ...args: any[]) {
         console.log(this.formatMessage("INFO", this.colors.info, message), ...args);
     }
 
-    public static success(message: string, ...args: any[]) {
+    public static success(message: any, ...args: any[]) {
         console.log(this.formatMessage("SUCCESS", this.colors.success, message), ...args);
     }
 
-    public static warn(message: string, ...args: any[]) {
+    public static warn(message: any, ...args: any[]) {
         console.warn(this.formatMessage("WARN", this.colors.warn, message), ...args);
     }
 
-    public static error(message: string, ...args: any[]) {
+    public static error(message: any, ...args: any[]) {
         console.error(this.formatMessage("ERROR", this.colors.error, message), ...args);
     }
 
-    public static debug(message: string, ...args: any[]) {
+    public static debug(message: any, ...args: any[]) {
         console.debug(this.formatMessage("DEBUG", this.colors.debug, message), ...args);
     }
 }

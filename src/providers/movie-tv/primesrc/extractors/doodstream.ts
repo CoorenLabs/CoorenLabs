@@ -36,7 +36,7 @@ export const extractDoodstream = async (url: string) => {
     }
 
     try {
-        const data1 = await fetcher(`${origin}/e/${id}`, true, "dood", {
+        const data1 = await fetcher(`${origin}/e/${id}`, true, "doodstream", {
             headers,
             keepalive: true
         });
@@ -53,24 +53,28 @@ export const extractDoodstream = async (url: string) => {
             return;
         }
 
-        // Bun.write(`./logs/${Date.now()}`, text1);
+        Bun.write(`./logs/${Date.now()}`, text1);
+        Logger.info(status1);
 
         const md5passRegex = /\/pass_md5\/[^'"]*/;
         const match = text1.match(md5passRegex);
 
         const path = match && match[0];
+
         if (!path) {
             Logger.error(logPrefix, "failed to extract `pass_md5`  path");
+            return;
         }
 
         // ?token=bcditrsyblzoequ7fi0dobkp&
         const tokenRegex = /\?token=([^&]*)&/;
         const match_token = text1.match(tokenRegex);
 
-        // console.log(match_token)
+        // console.log(match, match_token)
         const token = match_token && match_token[1];
         if (!token) {
             Logger.error(logPrefix, "failed to extract `token`  path");
+            return;
         }
 
 

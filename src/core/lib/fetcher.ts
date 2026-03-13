@@ -13,7 +13,7 @@ export type CfBypassCreds = {
   clearnaceCookieString: string, userAgent: string
 }
 
-const CF_COOKIE_TTL = 2 * 3600; // 2hr
+const FALLBACK_CF_COOKIE_TTL = 2 * 3600; // primarity uses the ttl got from cf  in teh resposne, fallbacks to this (2hr)
 
 const CF_BYPASS_MAX_TRY = 3;
 
@@ -39,7 +39,7 @@ export const fetcher = async (input: string, detectCfCapcha: boolean, cachePrefi
     const status = res.status;
 
     if (!res.ok) {
-      Logger.warn("[primsrc] Failed to fetch url:", input, "\n", "Status:", status);
+      Logger.warn(`[${cachePrefix}] Failed to fetch url:`, input, "\n", "Status:", status);
 
       if (detectCfCapcha && cf_captcha_status.includes(status)) {
         const text = await res.text();
@@ -48,21 +48,21 @@ export const fetcher = async (input: string, detectCfCapcha: boolean, cachePrefi
           return;
         }  // return if doesnt match to any cf capcha signatures
 
-        Logger.info("[primsrc] Detected CF Capcha");
+        Logger.info("[${cachePrefix}] Detected CF Capcha");
 
         for (let i = 1; i <= CF_BYPASS_MAX_TRY; ++i) {
-          Logger.info(`[primsrc] Bypasinng CF Capcha- Try ${i}/${CF_BYPASS_MAX_TRY}`);
+          Logger.info(`[${cachePrefix}] Bypasinng CF Capcha- Try ${i}/${CF_BYPASS_MAX_TRY}`);
 
-          const { success, allCookies, cfClearance, userAgent } = await getCloudflareClearance(input);
+          const { success, allCookies, cfClearance, userAgent, ttl } = await getCloudflareClearance(input);
 
           if (success) {
-            Logger.success("[primsrc] Successfully bypassed CF capcha");
+            Logger.success(`[${cachePrefix}] Successfully bypassed CF capcha`);
 
             const cookieCf = `cf_clearance=${cfClearance};`;
 
             const cfCredsToCache = JSON.stringify({ clearnaceCookieString: cookieCf, userAgent })
             console.log(cfCredsToCache)
-            Cache.set(`${cachePrefix}:cf-capcha:creds`, cfCredsToCache, CF_COOKIE_TTL); // dont await for non-blocking
+            Cache.set(`${cachePrefix}:cf-capcha:creds`, cfCredsToCache, ttl || FALLBACK_CF_COOKIE_TTL); // dont await for non-blocking
 
             const headers = {
               "Cookie": cfClearance ? cookieCf : "",
@@ -74,12 +74,10 @@ export const fetcher = async (input: string, detectCfCapcha: boolean, cachePrefi
             if (data && data.status >= 200 && data.status <= 299) {
               return data;
             }
-
           }
-
         }
 
-        Logger.error(`[primsrc] Failed to  Bypass CF Capcha - returning`);
+        Logger.error(`[${cachePrefix}] Failed to  Bypass CF Capcha - returning`);
 
       }
     }
@@ -89,6 +87,6 @@ export const fetcher = async (input: string, detectCfCapcha: boolean, cachePrefi
     return { success: true, status, text };
 
   } catch (err: unknown) {
-    Logger.error("[primsrc] Error occured while fetching url:", input, err);
+    Logger.error(`[${cachePrefix}] Error occured while fetching url:`, input, err);
   }
 };
