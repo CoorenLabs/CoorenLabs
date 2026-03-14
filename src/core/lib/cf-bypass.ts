@@ -24,20 +24,15 @@ const TIMEOUT = 15_000;
 let browserInstance: any = null;
 let pageInstance: any = null;
 
-// The Mutex Queue: Starts as an instantly resolved promise
 let bypassQueue: Promise<void> = Promise.resolve();
 
 export async function getCloudflareClearance(targetUrl: string): Promise<ClearanceResult> {
-  
-  // 1. ZERO-LATENCY QUEUE: Create a resolver for the current request
   let releaseLock: () => void;
   const nextInLine = new Promise<void>(resolve => { releaseLock = resolve; });
   
-  // Capture the current end of the queue to wait for, then append ourselves to the end
   const waitForPrevious = bypassQueue;
   bypassQueue = bypassQueue.then(() => nextInLine);
 
-  // Wait for our turn. This resolves the exact microsecond the previous request calls releaseLock()
   await waitForPrevious;
 
   try {
@@ -59,7 +54,6 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
     Logger.info(`Navigating to ${targetUrl}...`);
     await pageInstance.goto(targetUrl, { waitUntil: 'domcontentloaded' });
 
-    // 2. HIGH-FREQUENCY POLLING: 50ms instead of 500ms
     const extractionData = await new Promise<{ cookies: any[], cfClearance: string, userAgent: string, ttl: number }>((resolve, reject) => {
       // eslint-disable-next-line prefer-const
       let checkInterval: NodeJS.Timeout;
@@ -69,11 +63,16 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
         reject(new Error("Timeout: cf_clearance cookie never appeared."));
       }, TIMEOUT);
 
-      // 50ms is fast enough for near-instant detection, but slow enough to not lock the Node event loop
       checkInterval = setInterval(async () => {
         try {
           if (pageInstance.isClosed()) return;
           
+          // THE REAL FIX: Ignore the stale cookie while the CF challenge is still rendering
+          const title = await pageInstance.evaluate(() => document.title).catch(() => "");
+          if (title.includes('Just a moment') || title.includes('Cloudflare') || title.includes('Attention Required')) {
+            return; // Keep looping, do not resolve yet
+          }
+
           const cookies = await pageInstance.cookies();
           const cfCookie = cookies.find((c: any) => c.name === 'cf_clearance');
           
@@ -82,14 +81,14 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
             try {
               userAgent = await pageInstance.evaluate((): string => navigator.userAgent);
             } catch (err) {
-              return; // Context destroyed, try again in 50ms
+              return; 
             }
 
             clearInterval(checkInterval);
             clearTimeout(timeoutId);
             
             let ttlSeconds = 3600; 
-            if (cfCookie.expires) {
+            if (cfCookie.expires && cfCookie.expires > 0) {
               const currentUnixTime = Math.floor(Date.now() / 1000);
               ttlSeconds = Math.floor(cfCookie.expires) - currentUnixTime;
               if (ttlSeconds <= 0) ttlSeconds = 3600; 
@@ -105,7 +104,7 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
         } catch (err) {
           // Suppress rapid-reload context errors
         }
-      }, 50); // <-- Reduced from 500ms to 50ms
+      }, 50); 
     });
 
     Logger.info(`Got the cookie! TTL is ${extractionData.ttl} seconds.`);
@@ -123,7 +122,6 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
     console.error("Failed to bypass:", errorMessage);
     return { success: false, error: errorMessage };
   } finally {
-    // 3. INSTANT RELEASE: Unblock the next request in the queue immediately
     releaseLock!(); 
   }
 }

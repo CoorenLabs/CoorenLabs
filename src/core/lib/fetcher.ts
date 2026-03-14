@@ -2,7 +2,6 @@ import { Cache } from "../cache";
 import { Logger } from "../logger";
 import { cf_captcha_status, cf_signatures, getCloudflareClearance } from "./cf-bypass";
 
-
 type FetchResponse = {
   success: boolean,
   status: number,
@@ -13,31 +12,29 @@ export type CfBypassCreds = {
   clearnaceCookieString: string, userAgent: string
 }
 
-const FALLBACK_CF_COOKIE_TTL = 2 * 3600; // primarity uses the ttl got from cf  in teh resposne, fallbacks to this (2hr)
-
+const FALLBACK_CF_COOKIE_TTL = 2 * 3600; 
 const CF_BYPASS_MAX_TRY = 3;
 
 export const fetcher = async (input: string, detectCfCapcha: boolean, cachePrefix: string = "default", init: RequestInit = {}): Promise<FetchResponse> => {
-  // for flexibility, we can do
   try {
+    init = init || {};
+    init.headers = init.headers || {};
 
     if (detectCfCapcha) {
       const cfCredsRaw: string | undefined | null = await Cache.get(`${cachePrefix}:cf-capcha:creds`);
 
       if (cfCredsRaw) {
         const { clearnaceCookieString, userAgent } = JSON.parse(cfCredsRaw);
-
-        init = init || {};
-        init.headers = init.headers || {};
-
-        init.headers["cookie"] = init.headers["cookie"] ? clearnaceCookieString + ";" + init.headers["cookie"] : clearnaceCookieString;
-        init.headers["user-agent"] = userAgent;
+        
+        const headers = init.headers as Record<string, string>;
+        // Use lowercase to standardize for Bun fetch
+        headers["cookie"] = headers["cookie"] ? `${clearnaceCookieString}; ${headers["cookie"]}` : clearnaceCookieString;
+        headers["user-agent"] = userAgent;
       }
     }
 
     const res = await fetch(input, init);
     const status = res.status;
-
     const text = await res.text();
 
     if (!res.ok) {
@@ -45,32 +42,33 @@ export const fetcher = async (input: string, detectCfCapcha: boolean, cachePrefi
 
       if (detectCfCapcha && cf_captcha_status.includes(status)) {
         if (!cf_signatures.some(sig => text.includes(sig))) {
-          Logger.info("CF capcha not detected!")
+          Logger.info("CF capcha not detected!");
           return;
-        }  // return if doesnt match to any cf capcha signatures
+        }
 
         Logger.info(`[${cachePrefix}] Detected CF Capcha`);
 
         for (let i = 1; i <= CF_BYPASS_MAX_TRY; ++i) {
-          Logger.info(`[${cachePrefix}] Bypasinng CF Capcha- Try ${i}/${CF_BYPASS_MAX_TRY}`);
+          Logger.info(`[${cachePrefix}] Bypassing CF Capcha - Try ${i}/${CF_BYPASS_MAX_TRY}`);
 
           const { success, allCookies, cfClearance, userAgent, ttl } = await getCloudflareClearance(input);
 
           if (success) {
             Logger.success(`[${cachePrefix}] Successfully bypassed CF capcha`);
 
+            // Reverted back to your exact format with the semicolon
             const cookieCf = `cf_clearance=${cfClearance};`;
+            const cfCredsToCache = JSON.stringify({ clearnaceCookieString: cookieCf, userAgent });
+            
+            Cache.set(`${cachePrefix}:cf-capcha:creds`, cfCredsToCache, ttl || FALLBACK_CF_COOKIE_TTL);
 
-            const cfCredsToCache = JSON.stringify({ clearnaceCookieString: cookieCf, userAgent })
-            console.log(cfCredsToCache)
-            Cache.set(`${cachePrefix}:cf-capcha:creds`, cfCredsToCache, ttl || FALLBACK_CF_COOKIE_TTL); // dont await for non-blocking
+            const retryHeaders: Record<string, string> = {
+              ...(init.headers as Record<string, string>),
+              "cookie": cfClearance ? cookieCf : "",
+              "user-agent": userAgent || ""
+            };
 
-            const headers = {
-              "Cookie": cfClearance ? cookieCf : "",
-              "User-Agent": userAgent || ""
-            }
-
-            const data = await fetcher(input, false, cachePrefix, { headers });
+            const data = await fetcher(input, false, cachePrefix, { ...init, headers: retryHeaders });
 
             if (data && data.status >= 200 && data.status <= 299) {
               return data;
@@ -78,8 +76,7 @@ export const fetcher = async (input: string, detectCfCapcha: boolean, cachePrefi
           }
         }
 
-        Logger.error(`[${cachePrefix}] Failed to  Bypass CF Capcha - returning`);
-
+        Logger.error(`[${cachePrefix}] Failed to Bypass CF Capcha - returning`);
       }
     }
 
