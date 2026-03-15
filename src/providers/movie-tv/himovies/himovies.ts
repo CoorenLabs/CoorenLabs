@@ -209,7 +209,7 @@ export class HiMovies {
         });
         servers = parser.parseServers(cheerio.load(res.data));
       }
-      return { data: servers };
+      return { data: servers.filter((s) => ["upcloud", "megacloud"].includes(s.serverName)) };
     } catch (error: any) {
       return { error: error.message };
     }
@@ -228,7 +228,7 @@ export class HiMovies {
       if (serversRes.error) throw new Error(serversRes.error);
       
       const servers = serversRes.data as any[];
-      const priorityOrder = [server, "megacloud", "akcloud", "upcloud"];
+      const priorityOrder = [server, "megacloud", "upcloud"];
       let selectedServer = null;
       for (const name of priorityOrder) {
         selectedServer = servers.find(s => s.serverName === name);

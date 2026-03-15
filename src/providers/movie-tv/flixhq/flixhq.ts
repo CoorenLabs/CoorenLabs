@@ -215,13 +215,13 @@ export class FlixHQ {
         });
         servers = parser.parseServers(cheerio.load(res.data));
       }
-      return { data: servers };
+      return { data: servers.filter((s) => ["upcloud", "megacloud"].includes(s.serverName)) };
     } catch (error: any) {
       return { error: error.message };
     }
   }
 
-  static async fetchSources(episodeId: string, server = "vidcloud") {
+  static async fetchSources(episodeId: string, server = "megacloud") {
     if (episodeId.startsWith("http")) {
       const serverUrl = new URL(episodeId);
       return {
@@ -234,7 +234,7 @@ export class FlixHQ {
       if (serversRes.error) throw new Error(serversRes.error);
 
       const servers = serversRes.data as any[];
-      const priorityOrder = [server, "vidcloud", "upcloud", "akcloud"];
+      const priorityOrder = [server, "megacloud", "upcloud"];
       let selectedServer = null;
       for (const name of priorityOrder) {
         selectedServer = servers.find((s) => s.serverName === name);

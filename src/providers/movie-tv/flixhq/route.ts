@@ -126,7 +126,7 @@ const flixhqRoutes = new Elysia({ prefix: "/flixhq" })
       episodeId: t.String(),
     }),
     query: t.Object({
-      server: t.Optional(t.String({ default: "vidcloud" })),
+      server: t.Optional(t.String({ default: "megacloud" })),
     }),
   });
 
