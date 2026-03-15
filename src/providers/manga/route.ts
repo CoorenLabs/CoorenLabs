@@ -60,7 +60,6 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
           "GET /manga/atsu/filters            → List all valid Genre/Type/Status slugs",
           "GET /manga/atsu/explore            → Filtered search (?genres=ID&types=ID&statuses=ID&page=0)",
           "GET /manga/atsu/genre/:slug        → Browse titles by genre ID (?page=0)",
-          "GET /manga/atsu/author/:slug       → Browse titles by author ID (?page=0)",
           "",
           "--- CONTENT ENDPOINTS ---",
           "GET /manga/atsu/detail/:id         → Full title details and complete chapter list",
