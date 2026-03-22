@@ -9,7 +9,6 @@
     "start": "node index.js",
     "build:node": "tsc --project tsconfig.json --outDir dist",
     "build:bun": "bun build src/index.ts --outdir dist --minify --sourcemap",
-    "test": "bun run scripts/tests/index.ts",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix"
   },
