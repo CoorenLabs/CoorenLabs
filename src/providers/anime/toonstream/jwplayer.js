@@ -50,7 +50,7 @@
             y = function (e) {
               try {
                 return !!e();
-              } catch (_e) {
+              } catch (e) {
                 return !0;
               }
             },
@@ -96,7 +96,7 @@
                   if ((m(e), (t = b(t, !0)), m(n), E))
                     try {
                       return w(e, t, n);
-                    } catch (_e) {}
+                    } catch (e) {}
                   if ("get" in n || "set" in n) throw TypeError("Accessors not supported!");
                   return ("value" in n && (e[t] = n.value), e);
                 },
@@ -1120,7 +1120,7 @@
                   if (null !== i) {
                     try {
                       t = i(e._value);
-                    } catch (_e) {
+                    } catch (e) {
                       return void u(n.promise, e);
                     }
                     r(n.promise, t);
@@ -1167,7 +1167,7 @@
                   n || ((n = !0), u(t, e));
                 },
               );
-            } catch (_e) {
+            } catch (e) {
               if (n) return;
               ((n = !0), u(t, e));
             }
@@ -1226,7 +1226,7 @@
                           );
                       }
                       ((r[i] = o), 0 == --u && t(r));
-                    } catch (_e) {
+                    } catch (e) {
                       n(e);
                     }
                   })(i, r[i]);
@@ -2139,7 +2139,7 @@
                         "jwx" === f) &&
                         delete e.attributes.plugins[l];
                     }
-                  } catch (_e) {
+                  } catch (e) {
                     ((o = !0), (a = e));
                   } finally {
                     try {
@@ -2286,7 +2286,7 @@
                               case 0:
                                 try {
                                   $(r, n);
-                                } catch (_e) {}
+                                } catch (e) {}
                                 e.label = 1;
                               case 1:
                                 return (e.trys.push([1, 3, , 4]), [4, q(r, n)]);
@@ -2335,7 +2335,7 @@
                             r.attributes.playlist = e;
                             try {
                               (0, c.F8)(e);
-                            } catch (_e) {
+                            } catch (e) {
                               throw ((e.code += h.pV), e);
                             }
                             var t = r.getProviders(),
@@ -2393,7 +2393,7 @@
           ep = { removeItem: function (e) {} };
         try {
           ep = window.localStorage || ep;
-        } catch (_e) {
+        } catch (e) {
           eh.debug(e);
         }
         var eD = (function () {
@@ -2428,7 +2428,7 @@
                         try {
                           ("captions" === n && (r = JSON.stringify(r)),
                             (ep["".concat(t.namespace, ".").concat(n)] = r));
-                        } catch (_e) {
+                        } catch (e) {
                           ef.A.debug && eh.error(e);
                         }
                       });
@@ -3039,7 +3039,7 @@
               });
               (window.addEventListener("testPassive", c, t),
                 window.removeEventListener("testPassive", c, t));
-            } catch (_e) {
+            } catch (e) {
               a.A.logger.child("jwplayer/environment/environment").debug(e);
             }
             return e;
@@ -3707,11 +3707,11 @@
                     if (Array.isArray(d)) r = { playlist: d };
                     else if (Array.isArray(d.playlist)) r = d;
                     else throw Error("Playlist is not an array");
-                  } catch (_e) {
+                  } catch (e) {
                     throw new c.Mk(c.UP, 621, e);
                   }
                 e.trigger(u.VU, r);
-              } catch (_e) {
+              } catch (e) {
                 t(e);
               }
             };
@@ -4093,7 +4093,7 @@
                 e.removeAttribute("src");
                 try {
                   e.load();
-                } catch (_e) {
+                } catch (e) {
                   u.debug(e);
                 }
               }
@@ -4264,7 +4264,7 @@
                             var r;
                             try {
                               r = new window.MSMediaKeys(t);
-                            } catch (_e) {
+                            } catch (e) {
                               n(e);
                               return;
                             }
@@ -4529,7 +4529,7 @@
               try {
                 var n = e.video.webkitEnterFullscreen || e.video.webkitEnterFullScreen;
                 n && n.apply(e.video);
-              } catch (_e) {
+              } catch (e) {
                 return !1;
               }
               return e.getFullscreen();
@@ -4827,7 +4827,7 @@
                         ((f = l.cfgKey),
                           Object.hasOwn(n, f) && !l.async && r.push(v(t, e, l, n[f])));
                       }
-                    } catch (_e) {
+                    } catch (e) {
                       ((i = !0), (a = e));
                     } finally {
                       try {
@@ -4854,7 +4854,7 @@
                             );
                           r.push(v(t, e, y, y.cfg));
                         }
-                      } catch (_e) {
+                      } catch (e) {
                         ((p = !0), (D = e));
                       } finally {
                         try {
@@ -4928,7 +4928,7 @@
             if (!e.response || ("string" == typeof e.response && '"' !== e.responseText.substr(1)))
               try {
                 e = Object.assign({}, e, { response: JSON.parse(e.responseText) });
-              } catch (_e) {
+              } catch (e) {
                 c(t, o.UP, 611, e);
                 return;
               }
@@ -4964,7 +4964,7 @@
             ) {
               try {
                 p = D.requestFilter({ url: e, xhr: h });
-              } catch (_e) {
+              } catch (e) {
                 return (v(e, 5), h);
               }
               p && "open" in p && "send" in p && (h = D.xhr = p);
@@ -4990,7 +4990,7 @@
                         if (r)
                           try {
                             n = r.firstChild;
-                          } catch (_e) {}
+                          } catch (e) {}
                         if (
                           (r && n) ||
                           (D.useDomParser &&
@@ -5016,13 +5016,13 @@
                 : (D.useDomParser = !0));
             try {
               ((e = e.replace(/#.*$/, "")), h.open("GET", e, !0));
-            } catch (_e) {
+            } catch (e) {
               return (v(e, 3), h);
             }
             if (D.responseType)
               try {
                 h.responseType = D.responseType;
-              } catch (_e) {}
+              } catch (e) {}
             D.timeout &&
               ((D.timeoutId = setTimeout(function () {
                 (s(h), c(D, o.Tm, 1));
@@ -5032,7 +5032,7 @@
               }));
             try {
               (D.withCredentials && "withCredentials" in h && (h.withCredentials = !0), h.send());
-            } catch (_e) {
+            } catch (e) {
               v(e, 4);
             }
             return h;
@@ -5070,7 +5070,7 @@
               if (r)
                 try {
                   o.callback.apply(o.context || n, t);
-                } catch (_e) {
+                } catch (e) {
                   a.debug('Error in "'.concat(r, '" event handler:'), e);
                 }
               else o.callback.apply(o.context || n, t);
@@ -5268,7 +5268,7 @@
             if ("boolean" == typeof F.mock_) return F.mock_;
             try {
               return window.self !== window.top;
-            } catch (_e) {
+            } catch (e) {
               return !0;
             }
           };
@@ -5877,7 +5877,7 @@
                 "".concat(location.protocol, "//").concat(location.host) !==
                 "".concat(n.protocol, "//").concat(n.host)
               );
-            } catch (_e) {
+            } catch (e) {
               m.debug(e);
             }
             return !0;
@@ -5938,7 +5938,7 @@
             var t = "";
             try {
               t += s.stringify(e, null, "  ");
-            } catch (_e) {
+            } catch (e) {
               t += "{error stringifying value}";
             }
             return t;
@@ -5995,7 +5995,7 @@
                           this._namespace,
                           i.map(f).join("\n"),
                         ]));
-                    } catch (_e) {
+                    } catch (e) {
                       console.error(e);
                     }
                   },
@@ -6303,7 +6303,7 @@
             if (!e && (0, u.d4)())
               try {
                 e = g(window.top.document);
-              } catch (_e) {
+              } catch (e) {
                 s.child("jwplayer/utils/language").debug(e);
               }
             return e || navigator.language || "en";
@@ -6457,7 +6457,7 @@
               (t = new window.DOMParser().parseFromString(e, "text/xml")).querySelector(
                 "parsererror",
               ) && (t = null);
-            } catch (_e) {}
+            } catch (e) {}
             return t;
           },
           s = function (e) {
@@ -6559,7 +6559,7 @@
               var e = window.crypto || window.msCrypto;
               if (null == e ? void 0 : e.getRandomValues)
                 return e.getRandomValues(new Uint32Array(1))[0].toString(36);
-            } catch (_e) {
+            } catch (e) {
               r.A.logger.debug("jwplayer/utils/random-id-generator: ", e);
             }
             return Math.random().toString(36).slice(2, 9);
@@ -7672,7 +7672,7 @@
                   n[c] = 1 === l.length ? l[0] : l;
                 }
               }
-            } catch (_e) {
+            } catch (e) {
               ((i = !0), (o = e));
             } finally {
               try {
@@ -7711,7 +7711,7 @@
             if (c(e)) return e;
             try {
               return new URL(e, t).toString();
-            } catch (_e) {
+            } catch (e) {
               return "";
             }
           };
@@ -8088,7 +8088,7 @@
           var t = e;
           try {
             for (; t.document !== t.parent.document; ) t = t.parent;
-          } catch (_e) {}
+          } catch (e) {}
           return t;
         }),
           (u = function (e) {
@@ -8121,7 +8121,7 @@
               return Array.from(e.document.querySelectorAll("script")).some(function (e) {
                 return e.src.includes(u("Y29ubmF0aXguY29tL3AvcGx1Z2lucy9wcmViaWQ="));
               });
-            } catch (_e) {
+            } catch (e) {
               return !1;
             }
           }),
@@ -8135,7 +8135,7 @@
                   s = Array.from(t.frames).filter(function (e) {
                     return !o(e);
                   });
-                } catch (_e) {
+                } catch (e) {
                   return;
                 }
                 var u = !0,
@@ -8146,7 +8146,7 @@
                     var f = c.value;
                     (e.push(f), n(f, r + 1));
                   }
-                } catch (_e) {
+                } catch (e) {
                   ((i = !0), (a = e));
                 } finally {
                   try {
@@ -8166,7 +8166,7 @@
                 var r = e[n];
                 r && (void 0 === r ? "undefined" : (0, v._)(r)) === "object" && t.push(r);
               });
-            } catch (_e) {}
+            } catch (e) {}
             return t;
           }),
           (c = function (e) {
@@ -8317,13 +8317,13 @@
                 if (e.reset)
                   try {
                     e.reset();
-                  } catch (_e) {
+                  } catch (e) {
                     u.debug(e);
                   }
                 else if (e.destroy)
                   try {
                     e.destroy();
-                  } catch (_e) {
+                  } catch (e) {
                     u.debug(e);
                   }
               }),
@@ -8878,7 +8878,7 @@
             try {
               var r = ec(t, n);
               e.trackExternalAPIUsage(t, r);
-            } catch (_e) {
+            } catch (e) {
               B.A.debug && ei.warn(e);
             }
           },
@@ -9175,7 +9175,7 @@
                 var s = parseInt(u[2], 10);
                 s > 0 && (r = new Date()).setTime(s);
               }
-            } catch (_e) {
+            } catch (e) {
               t = l;
             }
             return { edition: t, token: n, expiration: r };
@@ -9240,7 +9240,7 @@
               e = (document.referrer ? u(document.referrer) : {}).host;
               try {
                 e = e || window.top.location.host;
-              } catch (_e) {}
+              } catch (e) {}
             }
             return e;
           };
@@ -9323,7 +9323,7 @@
           try {
             var a = e[i](o),
               s = a.value;
-          } catch (_e) {
+          } catch (e) {
             n(e);
             return;
           }
@@ -9464,7 +9464,7 @@
         function r() {
           try {
             var e = !Boolean.prototype.valueOf.call(Reflect.construct(Boolean, [], function () {}));
-          } catch (_e) {}
+          } catch (e) {}
           return (r = function () {
             return !!e;
           })();
@@ -9558,7 +9558,7 @@
                     !(o = (n = u.next()).done) && (i.push(n.value), !t || i.length !== t);
                     o = !0
                   );
-                } catch (_e) {
+                } catch (e) {
                   ((a = !0), (r = e));
                 } finally {
                   try {
@@ -9709,7 +9709,7 @@
                       continue;
                   }
                   c = t.call(e, i);
-                } catch (_e) {
+                } catch (e) {
                   ((c = [6, e]), (r = 0));
                 } finally {
                   n = u = 0;

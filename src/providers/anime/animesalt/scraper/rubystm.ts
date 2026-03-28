@@ -47,8 +47,8 @@ function extractPackedArgs(text: string) {
     const p = pRaw.trim().replace(/^['"]|['"]$/g, "");
 
     return { p, a, c, k };
-  } catch (_e) {
-    console.error("[StreamRuby] Manual extraction failed:", e);
+  } catch (error_rubystm) {
+    console.error("[StreamRuby] Manual extraction failed:", error_rubystm);
     return null;
   }
 }
