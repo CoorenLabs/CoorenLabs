@@ -44,20 +44,29 @@ Developed and maintained by [CoorenLabs](https://coorenlabs.com).
 
 ### Prerequisites
 
-Install [Bun](https://bun.sh).
+Install [Bun](https://bun.sh) (Recommended) or [Node.js](https://nodejs.org/) (v20+).
 
 ### Installation
 
 ```bash
 git clone https://github.com/CoorenLabs/CoorenLabs.git
 cd CoorenLabs
+
+# If using Bun
 bun install
+
+# If using Node.js
+npm install
 ```
 
 ### Running the Server
 
 ```bash
+# If using Bun
 bun run dev      # or bun run hot
+
+# If using Node.js
+npm run dev:node
 ```
 
 ### Build for Production
@@ -104,9 +113,15 @@ export const flixhqRoutes = new Elysia({ prefix: "/flixhq" })
 ## Testing & Linting
 
 ```bash
+# If using Bun:
 bun run test
 bun run lint
 bun run lint:fix
+
+# If using Node.js:
+npm run test:node
+npm run lint
+npm run lint:fix
 ```
 
 ---
