@@ -19,7 +19,7 @@
     "noUncheckedIndexedAccess": false,
     "noImplicitOverride": true,
     
-    "types": []
+    "types": ["node"]
   },
   "include": ["src/**/*", "old/cf-bypass-old-buggy.ts"]
 }

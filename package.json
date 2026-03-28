@@ -5,17 +5,21 @@
   "private": true,
   "scripts": {
     "dev": "bun run src/index.ts",
+    "dev:node": "tsx watch --env-file=.env src/index.ts",
     "hot": "bun run --hot src/index.ts",
     "start": "node index.js",
+    "start:node": "tsx --env-file=.env src/index.ts",
     "build:node": "tsc --project tsconfig.json --outDir dist",
     "build:bun": "bun build src/index.ts --outdir dist --minify --sourcemap",
     "test": "bun run scripts/tests/index.ts",
+    "test:node": "tsx --env-file=.env scripts/tests/index.ts",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/bun": "latest",
+    "@types/node": "^25.5.0",
     "@types/string-similarity": "^4.0.2",
     "@types/tough-cookie": "^4.0.5",
     "eslint": "^10.0.2",
@@ -27,6 +31,7 @@
   },
   "dependencies": {
     "@elysiajs/cors": "^1.4.1",
+    "@elysiajs/node": "^1.4.5",
     "@elysiajs/openapi": "^1.4.14",
     "@upstash/redis": "^1.36.3",
     "axios": "^1.13.6",
@@ -38,6 +43,7 @@
     "string-similarity": "^4.0.4",
     "tmdb-ts": "^2.3.0",
     "tough-cookie": "^6.0.0",
+    "tsx": "^4.21.0",
     "zod": "^4.3.6"
   }
 }

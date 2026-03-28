@@ -2,27 +2,29 @@
 // accept all incomings for this file, if coming from @binrot
 
 import { Redis } from "@upstash/redis";
-import { RedisClient } from "bun";
+// NOTE: This must remain a type-only import for Node.js compatibility.
+// The actual RedisClient is loaded dynamically below via require("bun").
+import type { RedisClient } from "bun";
 import { Logger } from "./logger";
 
 
 const cacheProviders = ["default", "uptash"]
 
-const ENABLE_CACHE = Bun.env.ENABLE_CACHE;
-const DEFAULT_CACHE_TTL = +(Bun.env.DEFAULT_CACHE_TTL || -1);
-const CACHE_PROVIDER = Bun.env.CACHE_PROVIDER;
+const ENABLE_CACHE = process.env.ENABLE_CACHE;
+const DEFAULT_CACHE_TTL = +(process.env.DEFAULT_CACHE_TTL || -1);
+const CACHE_PROVIDER = process.env.CACHE_PROVIDER;
 
 if (
     // ENABLE_CACHE && // dont check if cache is disabled
     isNaN(DEFAULT_CACHE_TTL)
-) throw new Error("Invalid `DEFAULT_CACHE_TTL` value " + Bun.env.DEFAULT_CACHE_TTL)
+) throw new Error("Invalid `DEFAULT_CACHE_TTL` value " + process.env.DEFAULT_CACHE_TTL)
 
 
 if (!CACHE_PROVIDER || !cacheProviders.includes(CACHE_PROVIDER)) throw new Error("Invalid `CACHE_PROVIDER` value " + CACHE_PROVIDER)
 
-const REDIS_URL = Bun.env.REDIS_URL;
-const UPSTASH_REDIS_REST_URL = Bun.env.UPSTASH_REDIS_REST_URL;
-const UPSTASH_REDIS_REST_TOKEN = Bun.env.UPSTASH_REDIS_REST_TOKEN;
+const REDIS_URL = process.env.REDIS_URL;
+const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_REDIS_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 
 let redis: Redis | RedisClient | undefined;
 
@@ -35,8 +37,13 @@ if (ENABLE_CACHE !== "true") {
 else if (CACHE_PROVIDER == "default") {
     if (!REDIS_URL) throw new Error("`REDIS_URL` is required to use redis cache!");
 
-    redis = new RedisClient(REDIS_URL, { autoReconnect: true, connectionTimeout: 10_000, maxRetries: 3 })
-    Logger.info("[Cache]  Redis (default) successfully initailized, now serving with cache!");
+    if (typeof Bun !== "undefined") {
+        const BunModule = require("bun");
+        redis = new BunModule.RedisClient(REDIS_URL, { autoReconnect: true, connectionTimeout: 10_000, maxRetries: 3 })
+        Logger.info("[Cache]  Redis (default) successfully initailized, now serving with cache!");
+    } else {
+        throw new Error("Default Redis caching (Bun native) is not supported on Node. Please use Upstash or disable cache.");
+    }
 }
 
 // uptash

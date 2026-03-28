@@ -1,5 +1,6 @@
 import cors from "@elysiajs/cors";
 import openapi from "@elysiajs/openapi";
+import { node } from "@elysiajs/node";
 import { Elysia } from "elysia";
 import {
   CORS_CREDENTIALS,
@@ -20,7 +21,9 @@ import { streamRoutes } from "./providers/stream/route";
 
 validateConfig();
 
-const app = new Elysia()
+const isBun = typeof Bun !== "undefined";
+
+const app = new Elysia({ adapter: isBun ? undefined : node() })
   .use(cors({
     origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN.split(","),
     credentials: CORS_CREDENTIALS,
@@ -80,5 +83,5 @@ app
 app.listen(PORT);
 
 Logger.info(
-  `Started at ${app.server?.protocol}://${app.server?.hostname}:${PORT}`,
+  `Started at ${app.server?.protocol || "http"}://${app.server?.hostname || "localhost"}:${PORT}`,
 );

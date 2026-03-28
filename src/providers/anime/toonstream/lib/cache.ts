@@ -1,6 +1,8 @@
-import { RedisClient } from "bun";
+// NOTE: This must remain a type-only import for Node.js compatibility.
+// The actual RedisClient is loaded dynamically below via require("bun").
+import type { RedisClient } from "bun";
 
-const redisUrl = Bun.env.REDIS_URL || undefined;
+const redisUrl = process.env.REDIS_URL || undefined;
 const cacheEnabled = process.env.ENABLE_CACHE && process.env.ENABLE_CACHE == "true"
 
 let redis: RedisClient | null = null;
@@ -9,10 +11,15 @@ if (!cacheEnabled) {
     console.log("[Cache] Caching is disabled! serving without cache.");
 } else {
     console.log("[Cache] Caching is enabled! serving with cache.");
-
-    redis = new RedisClient(redisUrl, {
-        maxRetries: 3
-    });
+    // Conditionally load Bun's RedisClient if running on Bun
+    if (typeof Bun !== "undefined") {
+        const BunModule = require("bun");
+        redis = new BunModule.RedisClient(redisUrl, {
+            maxRetries: 3
+        });
+    } else {
+        console.warn("[Cache] Native Redis caching requires Bun. Disabling cache on Node.js.");
+    }
 }
 
 export { redis };
