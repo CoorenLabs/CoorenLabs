@@ -43,7 +43,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/animekai/genre/:genre           → Search by genre",
           "GET /anime/animekai/info?id=               → Full anime info + episodes",
           "GET /anime/animekai/watch/:episodeId        → Stream sources (query: type=hardsub|softsub|dub)",
-          "GET /anime/animekai/servers/:episodeId     → Episode servers (query: dub)",
+          "GET /anime/animekai/servers/:episodeId     → Episode servers (query: type=hardsub|softsub|dub)",
         ],
         toonstream: [
           "GET /anime/toonstream/home                           → Home page (featured + recent)",
