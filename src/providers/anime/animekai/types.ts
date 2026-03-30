@@ -60,7 +60,7 @@ export const animekaiInfoSchema = z.object({
   anilistId: z.string().optional(),
   hasSub: z.boolean().optional(),
   hasDub: z.boolean().optional(),
-  subOrDub: z.enum(["sub", "dub", "both"]).optional(),
+  subOrDub: z.enum(["sub", "dub", "both", "hardsub"]).optional(),
   genres: z.array(z.string()).optional(),
   recommendations: z.array(animekaiRelatedItemSchema).optional(),
   relations: z.array(animekaiRelatedItemSchema).optional(),
