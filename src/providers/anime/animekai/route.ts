@@ -109,9 +109,14 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
       set.status = 400;
       return { message: "episodeId is required" };
     }
+    
+    // Determine type: check 'type' param first, then fallback to 'dub' param, default to 'hardsub'
+    const typeParam = qs?.type as string;
     const dubParam = qs?.dub;
-    const subOrDub: "softsub" | "dub" = dubParam === "true" || dubParam === "1" ? "dub" : "softsub";
-
+    const subOrDub: "softsub" | "dub" | "hardsub" = 
+      (typeParam === "softsub" || typeParam === "dub" || typeParam === "hardsub") 
+        ? typeParam 
+        : (dubParam === "true" || dubParam === "1") ? "dub" : "hardsub";
     // episodeId format: "animeSlug$ep=N$token=TOKEN"
     const animeSlug = episodeId.split("$")[0] ?? episodeId;
     const results = await AnimeKai.streams(animeSlug, episodeId, subOrDub);
@@ -124,7 +129,12 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
       set.status = 400;
       return { message: "episodeId is required" };
     }
+    const typeParam = qs?.type as string;
     const dubParam = qs?.dub;
-    const subOrDub: "softsub" | "dub" = dubParam === "true" || dubParam === "1" ? "dub" : "softsub";
+
+    const subOrDub: "softsub" | "dub" | "hardsub" = 
+      (typeParam === "softsub" || typeParam === "dub" || typeParam === "hardsub") 
+        ? typeParam 
+        : (dubParam === "true" || dubParam === "1") ? "dub" : "hardsub";
     return { servers: await AnimeKai.fetchEpisodeServers(episodeId, subOrDub) };
   });
