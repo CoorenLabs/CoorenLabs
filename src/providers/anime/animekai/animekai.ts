@@ -499,9 +499,11 @@ export class AnimeKai {
 
       const $ = cheerio.load(serverHtml);
       const servers: AnimeKaiServer[] = [];
-
-      const serverItems = $(`.server-items.lang-group[data-id="${subOrDub}"] .server`);
-
+      
+      // Map internal types to site data-ids: hardsub -> "sub", softsub -> "softsub", dub -> "dub"
+      const targetId = subOrDub === "hardsub" ? "sub" : subOrDub;
+      const serverItems = $(`.server-items.lang-group[data-id="${targetId}"] .server`);
+      
       await Promise.all(
         serverItems.toArray().map(async (server) => {
           const lid = $(server).attr("data-lid");
@@ -558,10 +560,12 @@ export class AnimeKai {
       const $ = cheerio.load(serverHtml);
       const results: any[] = [];
 
-      const langGroups =
-        subOrDub === "dub"
-          ? [".server-items.lang-group[data-id='dub']"]
-          : [".server-items.lang-group[data-id='softsub']", ".lang-group[data-id='softsub']"];
+      // Define target data-id based on input
+      const targetId = subOrDub === "hardsub" ? "sub" : subOrDub;
+      const langGroups = [`.server-items.lang-group[data-id='${targetId}']`];
+
+      // Fallback for softsub if needed
+      if (subOrDub === "softsub") langGroups.push(".lang-group[data-id='softsub']");
 
       const seen = new Set<string>();
       for (const group of langGroups) {
