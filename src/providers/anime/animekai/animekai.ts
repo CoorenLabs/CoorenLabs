@@ -570,6 +570,7 @@ export class AnimeKai {
       const seen = new Set<string>();
       for (const group of langGroups) {
         const isDub = group.includes("[data-id='dub']");
+        const isHard = group.includes("[data-id='sub']");
         const serverItems = $(`${group} .server`);
 
         for (const item of serverItems.toArray()) {
@@ -586,7 +587,7 @@ export class AnimeKai {
           const videoSources = await MegaUp.extract(decoded.url);
 
           results.push({
-            name: `MegaUp ${$(item).text().trim()}${isDub ? " (Dub)" : ""}`,
+            name: `MegaUp ${$(item).text().trim()}${isDub ? " (Dub)" : isHard ? " (HardSub)" : ""}`,
             url: decoded.url,
             intro: decoded.skip.intro,
             outro: decoded.skip.outro,
