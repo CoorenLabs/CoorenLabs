@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 import { mangaballRoutes } from "./mangaball/route";
 import { allmangaRoutes } from "./allmanga/route";
 import { atsuRoutes } from "./atsu/route";
+import { mangafireRoutes } from "./mangafire/route";
 
 export const mangaRoutes = new Elysia({ prefix: "/manga" })
   .get(
@@ -10,7 +11,7 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
       return {
         service: "manga",
         description: "Unified manga API — provider-isolated route architecture",
-        providers: ["mangaball", "allmanga", "atsu"],
+        providers: ["mangaball", "allmanga", "atsu", "mangafire"],
         endpoints: {
           mangaball: [
             "GET /manga/mangaball/home          → Featured titles and banners",
@@ -83,6 +84,17 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
             "--- UTILS ---",
             "GET /manga/atsu/image/* → Image proxy for bypass",
           ],
+          mangafire: [
+            "GET /manga/mangafire/home          → Featured sections",
+            "GET /manga/mangafire/search        → Search by keyword (?q=query&page=1)",
+            "GET /manga/mangafire/latest        → Latest updated list (?page=1)",
+            "GET /manga/mangafire/category/:id  → Browse by category type (?page=1)",
+            "GET /manga/mangafire/genre/:id     → Browse by genre (?page=1)",
+            "GET /manga/mangafire/detail/:id    → Manga details",
+            "GET /manga/mangafire/chapters/:id  → Chapters list or available languages (?lang=en)",
+            "GET /manga/mangafire/read/:id      → Chapter images",
+            "GET /manga/mangafire/volumes/:id   → Manga volumes (?lang=en)",
+          ],
         },
       };
     },
@@ -95,4 +107,5 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
   )
   .use(mangaballRoutes)
   .use(allmangaRoutes)
-  .use(atsuRoutes);
+  .use(atsuRoutes)
+  .use(mangafireRoutes);
