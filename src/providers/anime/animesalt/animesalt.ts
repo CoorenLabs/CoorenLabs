@@ -1,12 +1,9 @@
 import * as cheerio from "cheerio";
-import { Cache } from "../../../core/cache";
 import { Logger } from "../../../core/logger";
 import {
   ANIME_SALT_BASE,
   embedPlayerOrigins,
   UserAgent,
-  ASCDN_SOURCE_TTL,
-  RUBYSTREAM_SOURCE_TTL,
 } from "./constants";
 import { getAsCdnSource } from "./scraper/as-cdn";
 import { getRubystmSource } from "./scraper/rubystm";
@@ -26,7 +23,9 @@ export class AnimeSalt {
     return cheerio.load(await res.text());
   }
 
-  private static async resolveSource(url: string): Promise<DirectSource | null> {
+  private static async resolveSource(
+    url: string,
+  ): Promise<DirectSource | null> {
     try {
       if (url.includes("as-cdn")) return await getAsCdnSource(url);
       if (url.includes("rubystream")) return await getRubystmSource(url);
@@ -38,18 +37,52 @@ export class AnimeSalt {
     }
   }
 
+  private static async fetchAjaxRaw(
+    action: string,
+    params: Record<string, any>,
+    raw = false,
+  ) {
+    try {
+      const body = new URLSearchParams({
+        action,
+        ...Object.fromEntries(
+          Object.entries(params).map(([k, v]) => [k, String(v)]),
+        ),
+      }).toString();
+
+      const res = await fetch(`${ANIME_SALT_BASE}/wp-admin/admin-ajax.php`, {
+        method: "POST",
+        headers: {
+          accept: "*/*",
+          "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "x-requested-with": "XMLHttpRequest",
+          "User-Agent": UserAgent,
+        },
+        body,
+      });
+
+      if (!res.ok) throw new Error("AJAX request failed");
+
+      if (raw) {
+        return await res.text();
+      }
+
+      const json = await res.json();
+
+      if (!json?.success) {
+        throw new Error("Invalid AJAX response");
+      }
+
+      return json.data;
+    } catch (err) {
+      Logger.error("fetchAjaxRaw error:", err);
+      return null;
+    }
+  }
+
   static async home() {
-    const key = "home";
 
     try {
-      const cached = await Cache.get(key);
-      if (cached) {
-        try {
-          return JSON.parse(cached);
-        } catch (err) {
-          Logger.warn("Ignored error:", err);
-        }
-      }
 
       const $ = await this.fetchHtml(ANIME_SALT_BASE + "/");
 
@@ -66,7 +99,8 @@ export class AnimeSalt {
         const slug = url.split("/").filter(Boolean).pop() || "";
         const img = link.find("img");
 
-        const name = img.attr("title")?.trim() || img.attr("alt")?.trim() || slug;
+        const name =
+          img.attr("title")?.trim() || img.attr("alt")?.trim() || slug;
 
         let logo = img.attr("data-src") || img.attr("src") || "";
         if (logo.startsWith("//")) logo = "https:" + logo;
@@ -80,7 +114,11 @@ export class AnimeSalt {
 
         const img = $(ep).find("img");
 
-        let thumbnail = img.attr("data-src") || img.attr("data-lazy-src") || img.attr("src") || "";
+        let thumbnail =
+          img.attr("data-src") ||
+          img.attr("data-lazy-src") ||
+          img.attr("src") ||
+          "";
 
         if (thumbnail.startsWith("//")) thumbnail = "https:" + thumbnail;
 
@@ -128,7 +166,11 @@ export class AnimeSalt {
             const img = $(item).find("img");
             const url = $(item).find("a.lnk-blk").attr("href") || "";
 
-            let poster = img.attr("data-src") || img.attr("data-lazy-src") || img.attr("src") || "";
+            let poster =
+              img.attr("data-src") ||
+              img.attr("data-lazy-src") ||
+              img.attr("src") ||
+              "";
 
             if (poster.startsWith("//")) poster = "https:" + poster;
 
@@ -159,7 +201,8 @@ export class AnimeSalt {
       $(".section-title").each((_, header) => {
         const label = $(header).text().trim();
 
-        if ($(header).closest("section.widget_list_movies_series").length) return;
+        if ($(header).closest("section.widget_list_movies_series").length)
+          return;
 
         const chart = $(header).nextAll(".aa-cn").first();
         if (!chart.length) return;
@@ -170,7 +213,11 @@ export class AnimeSalt {
           const url = $(item).find("a").attr("href") || "";
           const img = $(item).find("img");
 
-          let poster = img.attr("data-src") || img.attr("data-lazy-src") || img.attr("src") || "";
+          let poster =
+            img.attr("data-src") ||
+            img.attr("data-lazy-src") ||
+            img.attr("src") ||
+            "";
 
           if (poster.startsWith("//")) poster = "https:" + poster;
 
@@ -194,8 +241,6 @@ export class AnimeSalt {
 
       const result = { networks, main, sidebar, lastEpisodes };
 
-      await Cache.set(key, JSON.stringify(result), 43200);
-
       return result;
     } catch (err) {
       Logger.error("AnimeSalt.home error:", err);
@@ -210,16 +255,6 @@ export class AnimeSalt {
   }
 
   static async search(query: string, page = 1) {
-    const key = `search:${query}:${page}`;
-
-    const cached = await Cache.get(key);
-    if (cached) {
-      try {
-        return JSON.parse(cached);
-      } catch (err) {
-        Logger.warn("Ignored error:", err);
-      }
-    }
 
     try {
       const encoded = encodeURIComponent(query).replace(/%20/g, "+");
@@ -237,11 +272,17 @@ export class AnimeSalt {
         const element = $(el);
 
         const url =
-          element.find("a.lnk-blk").attr("href") || element.find("article a").attr("href") || "";
+          element.find("a.lnk-blk").attr("href") ||
+          element.find("article a").attr("href") ||
+          "";
 
         const img = element.find(".post-thumbnail img");
 
-        let poster = img.attr("data-src") || img.attr("data-lazy-src") || img.attr("src") || "";
+        let poster =
+          img.attr("data-src") ||
+          img.attr("data-lazy-src") ||
+          img.attr("src") ||
+          "";
 
         if (poster.startsWith("//")) poster = "https:" + poster;
 
@@ -276,8 +317,6 @@ export class AnimeSalt {
         data,
       };
 
-      await Cache.set(key, JSON.stringify(result), 43200);
-
       return result;
     } catch (err) {
       Logger.error("AnimeSalt.search error:", err);
@@ -291,16 +330,6 @@ export class AnimeSalt {
   }
 
   static async category(type: string, page = 1, filter?: string) {
-    const key = `category:${type}:${filter || "all"}:page:${page}`;
-
-    const cached = await Cache.get(key);
-    if (cached) {
-      try {
-        return JSON.parse(cached);
-      } catch (err) {
-        Logger.warn("Ignored error:", err);
-      }
-    }
 
     try {
       const url =
@@ -332,7 +361,11 @@ export class AnimeSalt {
 
         const url = element.find("a.lnk-blk").attr("href") || "";
 
-        let poster = img.attr("data-src") || img.attr("data-lazy-src") || img.attr("src") || "";
+        let poster =
+          img.attr("data-src") ||
+          img.attr("data-lazy-src") ||
+          img.attr("src") ||
+          "";
 
         if (poster.startsWith("//")) poster = "https:" + poster;
 
@@ -361,8 +394,6 @@ export class AnimeSalt {
         data,
       };
 
-      await Cache.set(key, JSON.stringify(result), 604800);
-
       return result;
     } catch (err) {
       Logger.error("AnimeSalt.category error:", err);
@@ -375,29 +406,26 @@ export class AnimeSalt {
     }
   }
 
-  static async movies(page = 1) {
-    const key = `movies:${page}`;
-
-    const cached = await Cache.get(key);
-    if (cached) {
-      try {
-        return JSON.parse(cached);
-      } catch (err) {
-        Logger.warn("Ignored error:", err);
-      }
-    }
-
+  private static async fetchArchive(type: "movies" | "series", page = 1) {
+    
     try {
-      const url = ANIME_SALT_BASE + "/movies/" + (page === 1 ? "" : `page/${page}/`);
+      const res = await this.fetchAjaxRaw("torofilm_infinite_scroll", {
+        page,
+        per_page: 12,
+        query_type: "archive",
+        post_type: type,
+      });
 
-      const $ = await this.fetchHtml(url);
+      if (!res?.content) throw new Error("No content");
+
+      const $ = cheerio.load(res.content);
 
       const data: AnimeCard[] = [];
 
-      $(".aa-cn ul li").each((_, el) => {
+      $("li").each((_, el) => {
         const element = $(el);
 
-        const img = element.find(".post-thumbnail img");
+        const img = element.find("img");
 
         let title = element.find(".entry-title").text().trim();
 
@@ -411,7 +439,11 @@ export class AnimeSalt {
 
         const url = element.find("a.lnk-blk").attr("href") || "";
 
-        let poster = img.attr("data-src") || img.attr("data-lazy-src") || img.attr("src") || "";
+        let poster =
+          img.attr("src") ||
+          img.attr("data-src") ||
+          img.attr("data-lazy-src") ||
+          "";
 
         if (poster.startsWith("//")) poster = "https:" + poster;
 
@@ -420,7 +452,7 @@ export class AnimeSalt {
         const slug = url.split("/").filter(Boolean).pop() || "";
 
         data.push({
-          type: "movie",
+          type,
           title,
           slug,
           poster,
@@ -428,28 +460,34 @@ export class AnimeSalt {
         });
       });
 
-      let end = 1;
-      $("nav.pagination a.page-link").each((_, el) => {
-        const num = Number($(el).text());
-        if (!isNaN(num)) end = Math.max(end, num);
-      });
-
       const result = {
-        pagination: { current: page, start: 1, end },
+        pagination: {
+          current: page,
+          start: 1,
+          end: res.max_pages || page,
+          // optional:
+          // hasNext: res.has_more ?? false,
+        },
         data,
       };
 
-      await Cache.set(key, JSON.stringify(result), 2592000);
-
       return result;
     } catch (err) {
-      Logger.error("AnimeSalt.movies error:", err);
+      Logger.error(`AnimeSalt.${type} error:`, err);
 
       return {
         pagination: { current: page, start: 1, end: 1 },
         data: [],
       };
     }
+  }
+
+  static async movies(page = 1) {
+    return this.fetchArchive("movies", page);
+  }
+
+  static async series(page = 1) {
+    return this.fetchArchive("series", page);
   }
 
   static async movieInfo(slug: string) {
@@ -496,7 +534,8 @@ export class AnimeSalt {
       if (!duration) duration = $(".entry-meta .duration").text().trim();
 
       const description =
-        $("#overview-text p").first().text().trim() || $(".description p").first().text().trim();
+        $("#overview-text p").first().text().trim() ||
+        $(".description p").first().text().trim();
 
       const genres: any[] = [];
       const languages: string[] = [];
@@ -555,14 +594,6 @@ export class AnimeSalt {
         downloadLinks.push({ server, language, quality, url });
       });
 
-      let sources = { embeds: [], sources: [] };
-
-      try {
-        sources = await this.getSourcesFromPage($);
-      } catch (err) {
-        Logger.error("Source extraction failed:", err);
-      }
-
       const recommendations: AnimeCard[] = [];
       const seen = new Set();
 
@@ -576,7 +607,11 @@ export class AnimeSalt {
 
         const img = $(el).find("img");
 
-        let poster = img.attr("data-src") || img.attr("data-lazy-src") || img.attr("src") || "";
+        let poster =
+          img.attr("data-src") ||
+          img.attr("data-lazy-src") ||
+          img.attr("src") ||
+          "";
 
         if (poster.startsWith("//")) poster = "https:" + poster;
 
@@ -604,7 +639,6 @@ export class AnimeSalt {
         languages,
         genres,
         downloadLinks,
-        ...sources,
         recommendations,
       };
     } catch (err) {
@@ -619,9 +653,24 @@ export class AnimeSalt {
         languages: [],
         genres: [],
         downloadLinks: [],
+        recommendations: [],
+      };
+    }
+  }
+
+  static async movieSources(slug: string) {
+    try {
+      const $ = await this.fetchHtml(`${ANIME_SALT_BASE}/movies/${slug}/`);
+
+      const sources = await this.getSourcesFromPage($);
+
+      return sources;
+    } catch (err) {
+      Logger.error("AnimeSalt.movieSources error:", err);
+
+      return {
         embeds: [],
         sources: [],
-        recommendations: [],
       };
     }
   }
@@ -661,7 +710,8 @@ export class AnimeSalt {
       if (!year) year = $(".entry-meta .year").text().trim();
 
       const description =
-        $("#overview-text p").first().text().trim() || $(".description p").first().text().trim();
+        $("#overview-text p").first().text().trim() ||
+        $(".description p").first().text().trim();
       const genres: any[] = [];
       const tags: any[] = [];
       const casts: any[] = [];
@@ -711,7 +761,7 @@ export class AnimeSalt {
         try {
           seasons = await this.getSeasons(postId, totalSeasons || 1);
         } catch (err) {
-          Logger.error("Season fetch failed:", err);
+          Logger.error("AnimeSalt.getSeasons", err);
         }
       }
 
@@ -722,13 +772,17 @@ export class AnimeSalt {
         const url = $(el).find("a.lnk-blk").attr("href") || "";
         if (!url) return;
 
-        const slug = url.split("/").pop() || "";
+        const slug = url.split("/").filter(Boolean).pop() || "";
         if (seen.has(slug)) return;
         seen.add(slug);
 
         const img = $(el).find("img");
 
-        let poster = img.attr("data-src") || img.attr("data-lazy-src") || img.attr("src") || "";
+        let poster =
+          img.attr("data-src") ||
+          img.attr("data-lazy-src") ||
+          img.attr("src") ||
+          "";
 
         if (poster.startsWith("//")) poster = "https:" + poster;
 
@@ -796,35 +850,8 @@ export class AnimeSalt {
 
       for (const player of players) {
         try {
-          const key = `source:${player}`;
-          let source: DirectSource | null = null;
-
-          const cached = await Cache.get(key);
-
-          if (cached) {
-            try {
-              source = JSON.parse(cached);
-            } catch (err) {
-              Logger.warn("Cache parse failed:", err);
-              source = null;
-            }
-          } else {
-            source = await this.resolveSource(player);
-
-            if (source) {
-              let ttl = 3600;
-
-              if (player.startsWith(embedPlayerOrigins.asCdnOrigin)) {
-                ttl = ASCDN_SOURCE_TTL;
-              } else if (player.startsWith(embedPlayerOrigins.rubyStreamOrigin)) {
-                ttl = RUBYSTREAM_SOURCE_TTL;
-              }
-
-              await Cache.set(key, JSON.stringify(source), ttl);
-            }
-          }
-
-          if (!source) continue;
+          const source = await this.resolveSource(player);
+            if (!source) continue;
 
           yield {
             id: player,
@@ -849,17 +876,17 @@ export class AnimeSalt {
     for (let i = 1; i <= total; i++) {
       const episodes: Episode[] = [];
 
-      const res = await fetch(`${ANIME_SALT_BASE}/wp-admin/admin-ajax.php`, {
-        method: "POST",
-        headers: {
-          accept: "*/*",
-          "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-          "x-requested-with": "XMLHttpRequest",
+      const html = await this.fetchAjaxRaw(
+        "action_select_season",
+        {
+          season: i,
+          post: postId,
         },
-        body: `action=action_select_season&season=${i}&post=${postId}`,
-      });
+        true,
+      );
 
-      const html = await res.text();
+      if (!html) continue;
+
       const $ = cheerio.load(html);
 
       $("li").each((j, el) => {
@@ -920,12 +947,13 @@ export class AnimeSalt {
       try {
         const $ = await this.fetchHtml(url);
 
-        let iframe = $(".Video iframe").attr("src") || $("iframe").first().attr("src");
+        let iframe =
+          $(".Video iframe").attr("src") || $("iframe").first().attr("src");
         if (!iframe) continue;
         if (iframe.startsWith("//")) iframe = "https:" + iframe;
         results.push(iframe);
       } catch (err) {
-        Logger.warn("Ignored error:", err);
+        Logger.warn("AnimeSalt.extractPlayers", err);
       }
     }
 
@@ -944,34 +972,13 @@ export class AnimeSalt {
 
     for (const url of players) {
       try {
-        const key = `source:${url}`;
-        const cached = await Cache.get(key);
-
-        if (cached) {
-          try {
-            sources.push(JSON.parse(cached));
-            continue;
-          } catch (err) {
-            Logger.warn("Ignored error:", err);
-          }
-        }
 
         const src = await this.resolveSource(url);
         if (!src) continue;
 
-        let ttl = 3600;
-
-        if (url.startsWith(embedPlayerOrigins.asCdnOrigin)) {
-          ttl = ASCDN_SOURCE_TTL;
-        } else if (url.startsWith(embedPlayerOrigins.rubyStreamOrigin)) {
-          ttl = RUBYSTREAM_SOURCE_TTL;
-        }
-
-        await Cache.set(key, JSON.stringify(src), ttl);
-
         sources.push(src);
       } catch (err) {
-        Logger.error("Source extraction error:", err);
+        Logger.error("AnimeSalt.getSourcesFromPage", err);
       }
     }
 
