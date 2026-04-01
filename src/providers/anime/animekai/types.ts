@@ -85,6 +85,7 @@ export type AnimeKaiEpisode = AnimeKaiInfo["episodes"][number];
 export interface AnimeKaiServer {
   name: string;
   url: string;
+  isDub: boolean;
   intro: { start: number; end: number };
   outro: { start: number; end: number };
 }
