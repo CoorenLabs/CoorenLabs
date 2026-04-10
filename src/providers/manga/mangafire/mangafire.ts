@@ -498,14 +498,25 @@ export class MangaFireParser {
       const volumes: any[] = [];
 
       $(".unit").each((_, element) => {
+        const url = $(element).find("a").attr("href") || null;
+        let volumeNumber = null;
+        if (url) {
+          const match = url.match(/volume-(\d+)/);
+          if (match) volumeNumber = match[1];
+        }
+
         const image = $(element).find("img").attr("src");
         volumes.push({
-          id: $(element).find("a").attr("href") || null,
+          volume: volumeNumber,
+          url,
           image: image?.startsWith("http") ? image : `${BASE_URL}${image}`,
         });
       });
 
-      return volumes;
+      return {
+        mangaId,
+        volumes,
+      };
     } catch (error: any) {
       return { error: error.message };
     }
