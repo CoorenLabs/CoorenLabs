@@ -527,6 +527,7 @@ static async fetchEpisodeServers(
             servers.push({
               name: `megaup ${$(server).text().trim()}${suffix}`.toLowerCase(),
               url: decoded.url,
+              isDub: group.type === "dub",
               type: group.type,
               intro: {
                 start: decoded.skip.intro[0],
