@@ -25,7 +25,7 @@ export async function scrapeEpisodes(
   const episodes: Episode[] = (data.episodes ?? []).map((ep: any) => {
     let thumbnail = ep.thumbnail || ep.image || ep.img;
     if (thumbnail && typeof thumbnail === "string") {
-      thumbnail = thumbnail.replace("img.animetsu.cc/", "");
+      thumbnail = thumbnail.replace("https://img.animetsu.cc/", "");
       thumbnail = thumbnail.replace("i.animepahe.si", "i.animepahe.pw");
     }
 
