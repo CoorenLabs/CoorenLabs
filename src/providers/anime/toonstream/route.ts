@@ -315,8 +315,8 @@ export const toonstreamRoutes = new Elysia({ prefix: "/toonstream" })
         msg: "No Data Scraped!",
       };
   })
-  .get("/episode/sources/:slug", async ({ params: { slug } }) => {
-    const data = await ScrapeEpisodeSources(slug);
+  .get("/episode/sources/:slug", async ({ params: { slug }, request }) => {
+    const data = await ScrapeEpisodeSources(slug, request);
     if (data)
       return {
         success: true,

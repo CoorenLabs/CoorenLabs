@@ -30,6 +30,16 @@ export const OPENAPI_VERSION = env.OPENAPI_VERSION || "3.0.0";
 // Security Configuration
 export const REQUEST_TIMEOUT = parseInt(env.REQUEST_TIMEOUT || "60000", 10);
 
+// Provider Specific Configuration
+export const ANILIST_SPOTLIGHT_IDS = (env.ANILIST_SPOTLIGHT_IDS || "")
+  .split(",")
+  .map((id) => parseInt(id.trim(), 10))
+  .filter((id) => !isNaN(id));
+
+// Database Configuration
+export const DATABASE_URL = env.DATABASE_URL;
+export const REMAP_REFRESH_INTERVAL = parseInt(env.REMAP_REFRESH_INTERVAL || "600000", 10);
+
 // proxy confs
 export const SERVER_ORIGIN = env.SERVER_ORIGIN;
 

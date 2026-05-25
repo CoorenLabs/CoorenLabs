@@ -3,12 +3,14 @@ import { animekaiRoutes } from "./animekai/route";
 import { animepaheRoutes } from "./animepahe/route";
 import { toonstreamRoutes } from "./toonstream/route";
 import { animesaltRoutes } from "./animesalt/route";
+import { animelokAnimeRoutes } from "./animelok/route";
 
 export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(animepaheRoutes)
   .use(animekaiRoutes)
   .use(toonstreamRoutes)
   .use(animesaltRoutes)
+  .use(animelokAnimeRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
   .get(
@@ -16,7 +18,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
     () => ({
       service: "anime",
       description: "Unified anime API — provider-isolated route architecture",
-      providers: ["animepahe", "animekai", "toonstream", "animesalt"],
+      providers: ["animepahe", "animekai", "toonstream", "animesalt", "looker"],
       endpoints: {
         animepahe: [
           "GET /anime/animepahe/search/:query         → Search titles",
@@ -73,6 +75,10 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/animesalt/ts-segment?url=&headers=       → TS segment proxy",
           "GET /anime/animesalt/mp4-proxy?url=&headers=        → MP4 video proxy",
           "GET /anime/animesalt/fetch?url=&headers=            → Generic media fetch proxy",
+        ],
+        looker: [
+          "GET /anime/animelok/episodes/:anilistId?title={title}&page={page}&lang={lang}&pageSize={pageSize}    → Episode list",
+          "GET /anime/animelok/stream/:anilistId/:episode?title={title}&lang={lang}&quality={quality}           → Stream sources",
         ],
       },
     }),

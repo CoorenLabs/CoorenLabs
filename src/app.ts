@@ -9,6 +9,7 @@ import { mangaRoutes } from "./providers/manga/route";
 import { movieTvRoutes } from "./providers/movie-tv/route";
 import { musicRoutes } from "./providers/music/route";
 import { streamRoutes } from "./providers/stream/route";
+import { metaRoutes } from "./providers/meta/route";
 
 import { isNode } from "./core/runtime";
 
@@ -47,6 +48,7 @@ export async function createApp() {
         },
         tags: [
           { name: "anime", description: "📺 Anime Providers & Mappings" },
+          { name: "meta", description: "🔍 Meta Providers — AniList-backed anime discovery" },
           { name: "manga", description: "📚 Manga Providers (e.g., Mangaball, Atsu)" },
           { name: "movie", description: "🍿 Movie & TV Providers" },
           { name: "stream", description: "⚡ Direct Stream Providers" },
@@ -82,6 +84,7 @@ export async function createApp() {
     .use(mangaRoutes)
     .use(musicRoutes)
     .use(streamRoutes)
+    .use(metaRoutes)
     .use(proxyRoutes)
     .use(mappingRoutes);
 

@@ -86,6 +86,7 @@ export interface AnimeKaiServer {
   name: string;
   url: string;
   isDub: boolean;
+  type: "softsub" | "dub" | "hardsub";
   intro: { start: number; end: number };
   outro: { start: number; end: number };
 }

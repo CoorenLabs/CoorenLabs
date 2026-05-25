@@ -222,17 +222,25 @@ async function getSeasonsByPostId(postId: string, start_season: number, end_seas
   return seasons;
 }
 
-export async function ScrapeEpisodeSources(slug: string) {
-  const url = `${TOONSTREAM_BASE}/episode/${slug}/`;
+export async function ScrapeEpisodeSources(slug: string, req: Request) {
+  const urlObj = new URL(req.url);
+  const season = urlObj.searchParams.get("season");
+  const episode = urlObj.searchParams.get("episode");
+  const url = `${TOONSTREAM_BASE}/episode/${slug}-${season}x${episode}/`;
 
-  const key = `episode:iframes:${slug}`;
+  const key = `episode:iframes:${slug}:${season}:${episode}`;
   const cachedIframes = await Cache.get(key, true);
 
   if (cachedIframes) {
     const directSources = await getDirectSources(cachedIframes);
+    const targetUrl = cachedIframes.find((url: string) =>
+      url.includes("as-cdn21.top/video/")
+    );
+    const hash = targetUrl?.match(/\/video\/([^/?#]+)/)?.[1] ?? null;
     return {
+      hash: hash || null,
       embeds: cachedIframes,
-      sources: directSources,
+      sources: directSources
     };
   }
 
@@ -245,14 +253,20 @@ export async function ScrapeEpisodeSources(slug: string) {
 
     const toonStreamIframeUrls = $("aside#aa-options iframe")
       .map((_, el) => $(el).attr("data-src"))
-      .get();
+      .get()
+      .filter(Boolean);
 
     const playerIframeUrls = await getPlayerIframeUrls(toonStreamIframeUrls);
     Cache.set(key, true, playerIframeUrls, EPISODE_IFRAMES_TTL);
 
     const directSources = await getDirectSources(playerIframeUrls);
 
+    const targetUrl = playerIframeUrls.find((url: string) =>
+      url.includes("as-cdn21.top/video/")
+    );
+    const hash = targetUrl?.match(/\/video\/([^/?#]+)/)?.[1] ?? null;
     return {
+      hash: hash || null,
       embeds: playerIframeUrls,
       sources: directSources,
     };
