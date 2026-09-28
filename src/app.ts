@@ -57,7 +57,7 @@ export async function createApp() {
       () => ({
         name: "Cooren API",
         version: OPENAPI_VERSION,
-        repo: "https://github.com/CoorenLabs/Cooren.git",
+        repo: "https://github.com/CoorenLabs/CoorenLabs.git",
         environment: NODE_ENV,
         about:
           "Cooren is a high-performance, scalable scraping engine designed to collect, organize, and deliver structured data from across the world of anime, movies, manga, and music, all in one unified ecosystem",

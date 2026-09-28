@@ -6,7 +6,7 @@ First off, thank you for considering contributing to CoorenLabs! It's people lik
 
 ### Reporting Bugs
 
-- Check the [Issues](https://github.com/CoorenLabs/Cooren/issues) to see if it has already been reported.
+- Check the [Issues](https://github.com/CoorenLabs/CoorenLabs/issues) to see if it has already been reported.
 - Use a clear and descriptive title.
 - Describe the exact steps which reproduce the problem.
 

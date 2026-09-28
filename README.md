@@ -17,7 +17,7 @@ Developed and maintained by [CoorenLabs](https://coorenlabs.com).
 
 - [Website](https://coorenlabs.com)
 - [Documentation](https://docs.coorenlabs.com)
-- [GitHub](https://github.com/CoorenLabs/Cooren)
+- [GitHub](https://github.com/CoorenLabs/CoorenLabs)
 
 ---
 
@@ -51,8 +51,8 @@ Install [Bun](https://bun.sh).
 ### Installation
 
 ```bash
-git clone https://github.com/CoorenLabs/Cooren.git
-cd Cooren
+git clone https://github.com/CoorenLabs/CoorenLabs.git
+cd CoorenLabs
 bun install
 cp .env.example .env
 ```
