@@ -1,7 +1,16 @@
-export type DirectStream = {
-  url: string;
-  quality: string;
-  server: string;
+type Episode = {
+  number: number;
+  name: string;
+  title: string | null;
+  airdate: string | null;
+  thumbnail?: string;
+  image?: string;
+  img?: string;
+};
+
+export type EpisodeList = {
+  episodes: Episode[];
+  total: number;
 };
 
 export type EmbedStream = {
@@ -9,23 +18,11 @@ export type EmbedStream = {
   server: string;
 };
 
-/** Streams grouped by server name, each sorted by quality. */
-export type ServerGroup = {
+type ServerGroup = {
   server: string;
-  streams: Omit<DirectStream, "server">[];
+  streams: { url: string; quality: string }[];
 };
 
-export type StreamResult = {
-  episodeNumber: number;
-  lang: string;
-  hash: string | null;
-  /** Direct HLS/MP4 streams grouped by server (e.g. "pahe", "bato"). */
-  servers: ServerGroup[];
-  embeds: EmbedStream[];
-  best: string | null;
-};
-
-/** Streams for a single language track. */
 export type LangTrack = {
   hash: string | null;
   servers: ServerGroup[];
@@ -33,23 +30,7 @@ export type LangTrack = {
   best: string | null;
 };
 
-/** Combined sub + dub result returned by scrapeStreamBilingual(). */
-export type BilingualStreamResult = {
-  episodeNumber: number;
-  preferQuality: string;
+export type StreamTracks = {
   sub: LangTrack;
   dub: LangTrack;
-};
-
-export type Episode = {
-  number: number;
-  name: string;
-  id?: string;
-  thumbnail?: string;
-};
-
-export type EpisodesResult = {
-  episodes: Episode[];
-  total?: number;
-  page?: number;
 };

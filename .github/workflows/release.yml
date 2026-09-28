@@ -5,15 +5,15 @@ on:
     branches:
       - master
     paths-ignore:
-      - '**.md'
-      - '.gitignore'
+      - "**.md"
+      - ".gitignore"
 
 jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,8 +27,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WITH_V: true
           DEFAULT_BUMP: patch
-          # The action automatically looks for #major, #minor, #patch in commit messages
-          # If none are found, it uses DEFAULT_BUMP
 
       - name: Create GitHub Release
         if: steps.tag_action.outputs.new_tag != ''
@@ -38,7 +36,7 @@ jobs:
           name: Release ${{ steps.tag_action.outputs.new_tag }}
           body: |
             Automated release for version ${{ steps.tag_action.outputs.new_tag }}
-            
+
             Changes in this version:
             ${{ github.event.head_commit.message }}
           draft: false

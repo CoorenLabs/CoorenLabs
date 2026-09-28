@@ -1,42 +1,50 @@
-import { lookerFetch } from "../lib/fetch";
-import { buildFullSlug } from "../lib/slug";
-import type { Episode } from "../lib/types";
+import { animelokFetch } from "../lib/fetch";
+import type { EpisodeList } from "../lib/types";
 
-/**
- * Fetch a paginated episode list for an anime from animelok.xyz.
- *
- * Maps to: GET /anime/animelok/episodes/:anilistId?title=&page=&lang=&pageSize=
- * Source: animelok-worker → handleEpisodes()
- */
-export async function scrapeEpisodes(
-  anilistId: string,
-  title: string,
-  page: number = 0,
-  lang: string = "ALL",
-  pageSize: number = 30,
-): Promise<{ episodes: Episode[]; total?: number; page: number }> {
-  const slug = buildFullSlug(title, anilistId);
-  console.log("url", `${slug}/episodes-range?page=${page}&lang=${lang}&pageSize=${pageSize}`);
-  const apiPath = `/api/anime/${slug}/episodes-range?page=${page}&lang=${lang}&pageSize=${pageSize}`;
+type WatchProps = {
+  totalEpisodes?: number | null;
+  episodes: {
+    number: number;
+    title: string | null;
+    image: string | null;
+    airdate: string | null;
+  }[];
+};
 
-  const data = await lookerFetch(apiPath, slug);
+function findWatchProps(node: unknown): WatchProps | undefined {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray((node as WatchProps).episodes)) return node as WatchProps;
+  for (const child of Object.values(node)) {
+    const props = findWatchProps(child);
+    if (props) return props;
+  }
+}
 
-  // Fill in missing episode names and format thumbnails
-  const episodes: Episode[] = (data.episodes ?? []).map((ep: any) => {
-    let thumbnail = ep.thumbnail || ep.image || ep.img;
-    if (thumbnail && typeof thumbnail === "string") {
-      thumbnail = thumbnail.replace("https://img.animetsu.cc/", "");
-      thumbnail = thumbnail.replace("i.animepahe.si", "i.animepahe.pw");
+function parseWatchPayload(payload: string): WatchProps | undefined {
+  for (const line of payload.split("\n")) {
+    if (!line.includes('"episodes":[')) continue;
+    try {
+      const props = findWatchProps(JSON.parse(line.slice(line.indexOf(":") + 1)));
+      if (props) return props;
+    } catch {
+      continue;
     }
+  }
+}
 
+export async function scrapeEpisodes(anilistId: string): Promise<EpisodeList> {
+  const props = parseWatchPayload(await animelokFetch(`/watch/${anilistId}`, { RSC: "1" }));
+  const episodes = (props?.episodes ?? []).map((ep) => {
+    const image = ep.image || undefined;
     return {
-      ...ep,
-      thumbnail,
-      image: thumbnail,
-      img: thumbnail,
-      name: ep.name && ep.name.trim() !== "" ? ep.name : `Episode ${ep.number}`,
+      number: ep.number,
+      name: ep.title?.trim() || `Episode ${ep.number}`,
+      title: ep.title,
+      airdate: ep.airdate,
+      thumbnail: image,
+      image,
+      img: image,
     };
   });
-
-  return { episodes, total: data.total, page };
+  return { episodes, total: props?.totalEpisodes ?? episodes.length };
 }

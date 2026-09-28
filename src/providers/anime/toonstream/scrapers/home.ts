@@ -1,117 +1,45 @@
-import * as cheerio from "cheerio";
-import { TOONSTREAM_BASE } from "../lib/const";
-import { AnimeCard, LastEpisode, MainSection, SidebarSection } from "../lib/types";
+import { absolute, type AnimeCard, load, parseCards, slugOf } from "../lib/parse";
+
+type Section = { label: string; viewMore?: string; data: AnimeCard[] };
 
 export async function ScrapeHomePage() {
-  /**
-   * SERVE CACHE: TODO
-   **/
+  const $ = await load("/home");
 
-  try {
-    const url = TOONSTREAM_BASE + "/home/";
-    const res = await fetch(url);
+  const sections = (selector: string) =>
+    $(selector)
+      .filter((_, el) => $(el).children("header").length > 0)
+      .map((_, el): Section | null => {
+        const section = $(el);
+        const cards = section.find("article.post");
+        if (!cards.length || cards.find('a.lnk-blk[href*="/episode/"]').length) return null;
+        const viewMore = section.children("header").find("a.more").attr("href");
+        return {
+          label: section.children("header").find(".section-title").text().trim(),
+          viewMore: viewMore && absolute(viewMore),
+          data: parseCards($, cards),
+        };
+      })
+      .get();
 
-    if (!res.ok) throw new Error("Failed to fetch " + url);
+  const lastEpisodes = $('main article.post:has(a.lnk-blk[href*="/episode/"])')
+    .map((_, el) => {
+      const card = $(el);
+      const url = absolute(card.find("a.lnk-blk").attr("href") ?? "");
+      const slug = slugOf(url);
+      return {
+        title: card.find(".entry-title").text().trim(),
+        slug,
+        url,
+        epXseason: slug.match(/(\d+x\d+)$/)?.[1] ?? "",
+        ago: "",
+        thumbnail: card.find("img").attr("src") ?? "",
+      };
+    })
+    .get();
 
-    const html = await res.text();
-    const $ = cheerio.load(html, { xml: true });
-
-    /*  SIDEBAR */
-    const sidebarSections: SidebarSection[] = [];
-    $("aside.sidebar section").each((_, section) => {
-      const sectionTitle = $(section).find("h3.section-title").text();
-      if (!sectionTitle) return; // skip invalid ones
-
-      const data: AnimeCard[] = [];
-
-      $(section)
-        .find("ul li")
-        .each((_, item) => {
-          const title = $(item).find("article header h2.entry-title").text();
-          const url = $(item).find("article a").attr("href");
-          const poster = $(item).find("article .post-thumbnail img").attr("src");
-
-          if (!url || !poster) return;
-
-          const type = url.startsWith(TOONSTREAM_BASE + "/series") ? "series" : "movie";
-          const tmdbRating = Number(
-            $(item).find("article header .vote").text().replace("TMDB", "").trim(),
-          );
-          const slug = url.split("/").reverse()[1];
-
-          data.push({ type, title, slug, poster, url, tmdbRating });
-        });
-
-      sidebarSections.push({ label: sectionTitle, data });
-    });
-    /* END SIDEBAR */
-
-    /**  MAIN SECTIONS **/
-
-    // LAST EPISODES
-    const lastEpisodes: LastEpisode[] = [];
-
-    $("main .widget_list_episodes ul li").each((_, ep) => {
-      const url = $(ep).find("a").attr("href");
-      const thumbnail = $(ep).find("img").attr("src");
-
-      if (!url || !thumbnail) return;
-
-      const slug = url.split("/").reverse()[1];
-
-      const title = $(ep).find("header h2.entry-title").text();
-      const epXseason = $(ep).find("header .num-epi").text();
-      const ago = $(ep).find("header .time").text();
-
-      lastEpisodes.push({ title, slug, url, epXseason, ago, thumbnail });
-    });
-    // END  LAST EPISODES
-
-    // MAIN SECTIONS
-    const mainSections: MainSection[] = [];
-
-    $("main section.movies").each((_, sect) => {
-      const sectionTitle = $(sect).find("header .section-title").text();
-      const viewMoreUrl = $(sect).find("header a").attr("href");
-
-      const data: AnimeCard[] = [];
-
-      $(sect)
-        .find(".aa-cn ul li")
-        .each((_, item) => {
-          const title = $(item).find("article header h2.entry-title").text();
-          const url = $(item).find("article a").attr("href") || "";
-          const poster = $(item).find("article .post-thumbnail img").attr("src") || "";
-
-          if (!url || !poster) return;
-
-          const type = url.startsWith(TOONSTREAM_BASE + "/series") ? "series" : "movie";
-          const tmdbRating = Number(
-            $(item).find("article header .vote").text().replace("TMDB", "").trim(),
-          );
-          const slug = url.split("/").reverse()[1];
-
-          data.push({ type, title, slug, poster, url, tmdbRating });
-        });
-
-      mainSections.push({ label: sectionTitle, viewMore: viewMoreUrl, data });
-    });
-    // END MAIN SECTIONS
-
-    // SCHEDULE
-    //TODO scrape schedules
-    // END SCHEDULE
-
-    /**  END MAIN SECTIONS **/
-
-    return {
-      main: mainSections,
-      sidebar: sidebarSections,
-      lastEpisodes,
-    };
-  } catch (err) {
-    console.log("Error", err);
-  }
+  const main = sections("main section");
+  const sidebar = sections("aside section");
+  return main.length || sidebar.length || lastEpisodes.length
+    ? { main, sidebar, lastEpisodes }
+    : null;
 }
-
-// Bun.write(`logs/${Date.now()}`, JSON.stringify(await ScrapeHome()))

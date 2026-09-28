@@ -1,21 +1,40 @@
-import { z } from "zod";
+export interface SearchResponse {
+  data?: {
+    title: string;
+    type: string;
+    episodes: number;
+    status: string;
+    year: number;
+    score: number;
+    poster: string;
+    session: string;
+  }[];
+}
 
-// ─── Search API ─────────────────────────────────────────────────────────────
-export const searchSchema = z.object({
-  data: z.array(
-    z.object({
-      id: z.number(),
-      title: z.string(),
-      type: z.string(),
-      episodes: z.number(),
-      status: z.string(),
-      year: z.number(),
-      score: z.number(),
-      poster: z.string(),
-      session: z.string(),
-    }),
-  ),
-});
+export interface AiringResponse {
+  data?: {
+    anime_title: string;
+    anime_session: string;
+    episode: number;
+    fansub: string;
+    snapshot: string;
+    session: string;
+    created_at: string;
+  }[];
+}
+
+export interface ReleaseResponse {
+  last_page?: number;
+  data?: {
+    episode: number;
+    title: string;
+    snapshot: string;
+    duration: string;
+    session: string;
+    filler: number;
+    created_at: string;
+  }[];
+}
 
 export interface AnimeSearchItem {
   id: string;
@@ -29,29 +48,6 @@ export interface AnimeSearchItem {
   session: string;
 }
 
-// ─── Airing / Latest API ───────────────────────────────────────────────────
-
-export const airingSchema = z.object({
-  data: z.array(
-    z.object({
-      id: z.number(),
-      anime_id: z.number(),
-      anime_title: z.string(),
-      anime_session: z.string(),
-      episode: z.number(),
-      episode2: z.number(),
-      edition: z.string(),
-      fansub: z.string(),
-      snapshot: z.string(),
-      disc: z.string(),
-      session: z.string(),
-      filler: z.number(),
-      created_at: z.string(),
-      completed: z.number(),
-    }),
-  ),
-});
-
 export interface AiringItem {
   id: string;
   title: string;
@@ -62,29 +58,6 @@ export interface AiringItem {
   created_at: string;
 }
 
-// ─── Release / Episodes API ────────────────────────────────────────────────
-
-export const releaseSchema = z.object({
-  last_page: z.number(),
-  data: z.array(
-    z.object({
-      id: z.number(),
-      anime_id: z.number(),
-      episode: z.number(),
-      episode2: z.number(),
-      edition: z.string(),
-      title: z.string(),
-      snapshot: z.string(),
-      disc: z.string(),
-      audio: z.string(),
-      duration: z.string(),
-      session: z.string(),
-      filler: z.number(),
-      created_at: z.string(),
-    }),
-  ),
-});
-
 export interface Episode {
   title: string;
   episode: number;
@@ -94,8 +67,6 @@ export interface Episode {
   filler: boolean;
   session: string;
 }
-
-// ─── Anime Info / Meta ─────────────────────────────────────────────────────
 
 export interface AnimeMeta {
   id: string;
@@ -109,17 +80,14 @@ export interface AnimeMeta {
   externalLinks: string[];
 }
 
-// ─── Stream Results ────────────────────────────────────────────────────────
-
 export interface StreamResult {
   id: string;
   title: string;
   url: string;
-  directUrl?: string | null;
+  directUrl: string;
+  proxiedUrl: string;
   quality: string;
   audio: string;
-  type?: string;
-  downloadUrl?: string | null;
-  corsHeaders?: Record<string, string>;
-  animeName?: string;
+  downloadUrl: string | null;
+  corsHeaders: Record<string, string>;
 }

@@ -1,356 +1,232 @@
-import * as cheerio from "cheerio";
+import type { CheerioAPI } from "cheerio";
 import { Cache } from "../../../core/cache";
 import { Logger } from "../../../core/logger";
-import { ANIME_SALT_BASE } from "./constants";
-import { getAsCdnSource } from "./scraper/as-cdn";
-import { getRubystmSource } from "./scraper/rubystm";
-
-import type { AnimeCard, LastEpisode, Season, Episode, DirectSource } from "./types";
-
-export class AnimeSalt {
-  private static async fetchHtml(url: string) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("Fetch failed: " + url);
-    return cheerio.load(await res.text());
-  }
-
-  static async home() {
-    const key = "home";
-    const cached = await Cache.get(key);
-    if (cached) return JSON.parse(cached);
-
-    try {
-      const $ = await this.fetchHtml(ANIME_SALT_BASE + "/");
-
-      const lastEpisodes: LastEpisode[] = [];
-
-      $(".widget_list_episodes li").each((_, el) => {
-        const url = $(el).find("a.lnk-blk").attr("href") || "";
-        const img = $(el).find("img");
-
-        let poster = img.attr("data-src") || img.attr("src") || "";
-        if (poster.startsWith("//")) poster = "https:" + poster;
-
-        lastEpisodes.push({
-          title: img.attr("alt") || "",
-          slug: url.split("/").pop() || "",
-          url,
-          thumbnail: poster,
-          epXseason: "",
-          ago: "",
-        });
-      });
-
-      const result = { lastEpisodes };
-      Cache.set(key, JSON.stringify(result), 43200);
-      return result;
-    } catch (err) {
-      Logger.error(err);
-      return null;
-    }
-  }
-
-  static async search(query: string, page = 1) {
-    const key = `search:${query}:${page}`;
-    const cached = await Cache.get(key);
-    if (cached) return JSON.parse(cached);
-
-    try {
-      const url =
-        page === 1
-          ? `${ANIME_SALT_BASE}/?s=${query}`
-          : `${ANIME_SALT_BASE}/page/${page}/?s=${query}`;
-
-      const $ = await this.fetchHtml(url);
-
-      const data: AnimeCard[] = [];
-
-      $(".aa-cn li").each((_, el) => {
-        const link = $(el).find("a.lnk-blk");
-        const url = link.attr("href") || "";
-
-        const img = $(el).find("img");
-        let poster = img.attr("data-src") || img.attr("src") || "";
-        if (poster.startsWith("//")) poster = "https:" + poster;
-
-        data.push({
-          title: img.attr("alt") || "",
-          slug: url.split("/").pop() || "",
-          poster,
-          url,
-          type: url.includes("/series/") ? "series" : "movie",
-        });
-      });
-
-      const result = { data };
-      Cache.set(key, JSON.stringify(result), 43200);
-      return result;
-    } catch (err) {
-      Logger.error(err);
-      return null;
-    }
-  }
-
-  static async category(type: string, page = 1, filter?: string) {
-    const key = `category:${type}:${filter || "all"}:${page}`;
-    const cached = await Cache.get(key);
-    if (cached) return JSON.parse(cached);
-
-    try {
-      const url =
-        ANIME_SALT_BASE +
-        "/category/" +
-        type +
-        "/" +
-        (page === 1 ? "" : `page/${page}/`) +
-        (filter ? `?type=${filter}` : "");
-
-      const $ = await this.fetchHtml(url);
-
-      const data: AnimeCard[] = [];
-
-      $(".aa-cn li").each((_, el) => {
-        const link = $(el).find("a.lnk-blk");
-        const url = link.attr("href") || "";
-
-        const img = $(el).find("img");
-        let poster = img.attr("data-src") || img.attr("src") || "";
-        if (poster.startsWith("//")) poster = "https:" + poster;
-
-        data.push({
-          title: img.attr("alt") || "",
-          slug: url.split("/").pop() || "",
-          poster,
-          url,
-          type: url.includes("/series/") ? "series" : "movie",
-        });
-      });
-
-      const current = page;
-      const end = Number($("nav.pagination a.page-link").last().text() || 1);
-
-      const result = {
-        pagination: { current, start: 1, end },
-        data,
-      };
-
-      Cache.set(key, JSON.stringify(result), 604800);
-      return result;
-    } catch (err) {
-      Logger.error(err);
-      return null;
-    }
-  }
-
-  static async movies(page = 1) {
-    const key = `movies:${page}`;
-    const cached = await Cache.get(key);
-    if (cached) return JSON.parse(cached);
-
-    try {
-      const url = `${ANIME_SALT_BASE}/movies/${page === 1 ? "" : `page/${page}/`}`;
-      const $ = await this.fetchHtml(url);
-
-      const data: AnimeCard[] = [];
-
-      $(".aa-cn li").each((_, el) => {
-        const link = $(el).find("a.lnk-blk");
-        const url = link.attr("href") || "";
-
-        const img = $(el).find("img");
-        let poster = img.attr("data-src") || img.attr("src") || "";
-        if (poster.startsWith("//")) poster = "https:" + poster;
-
-        data.push({
-          title: img.attr("alt") || "",
-          slug: url.split("/").pop() || "",
-          poster,
-          url,
-          type: "movie",
-        });
-      });
-
-      const result = { data };
-      Cache.set(key, JSON.stringify(result), 2592000);
-      return result;
-    } catch (err) {
-      Logger.error(err);
-      return null;
-    }
-  }
-
-  static async movieInfo(slug: string) {
-    try {
-      const $ = await this.fetchHtml(`${ANIME_SALT_BASE}/movies/${slug}/`);
-
-      const title = $("h1").text().trim();
-
-      const poster = $(".bd img").attr("data-src") || $(".bd img").attr("src") || "";
-
-      const description = $("#overview-text p").text().trim();
-
-      const downloadLinks: any[] = [];
-
-      $("table tbody tr").each((_, el) => {
-        const row = $(el);
-        downloadLinks.push({
-          server: row.find("td").eq(0).text(),
-          quality: row.find("td").eq(2).text(),
-          url: row.find("a").attr("href"),
-        });
-      });
-
-      const sources = await this.getSourcesFromPage($);
-
-      return {
-        title,
-        poster,
-        description,
-        downloadLinks,
-        ...sources,
-      };
-    } catch (err) {
-      Logger.error(err);
-      return null;
-    }
-  }
-
-  static async seriesInfo(slug: string) {
-    try {
-      const $ = await this.fetchHtml(`${ANIME_SALT_BASE}/series/${slug}/`);
-
-      const title = $("h1").text().trim();
-
-      const bodyClass = $("body").attr("class") || "";
-      const postId = bodyClass.match(/postid-(\d+)/)?.[1];
-
-      const seasons = postId ? await this.getSeasons(postId) : [];
-
-      return { title, seasons };
-    } catch (err) {
-      Logger.error(err);
-      return null;
-    }
-  }
-
-  static async *streams(slug: string) {
-    try {
-      const $ = await this.fetchHtml(`${ANIME_SALT_BASE}/episode/${slug}/`);
-
-      const iframeUrls = $("iframe")
-        .map((_, el) => $(el).attr("src"))
-        .get()
-        .filter(Boolean);
-
-      const players = await this.extractPlayers(iframeUrls);
-
-      for (const player of players) {
-        try {
-          const source = await this.extractSource(player);
-          if (!source) continue;
-
-          yield {
-            id: player,
-            title: "Auto",
-            url: player,
-            directUrl: source.url,
-            quality: source.label || "auto",
-            type: source.type || "hls",
-          };
-        } catch (_err) {}
-      }
-    } catch (err) {
-      Logger.error(err);
-    }
-  }
-
-  private static async getSeasons(postId: string) {
-    const seasons: Season[] = [];
-
-    for (let i = 1; i <= 20; i++) {
-      try {
-        const res = await fetch(`${ANIME_SALT_BASE}/wp-admin/admin-ajax.php`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-          },
-          body: `action=action_select_season&season=${i}&post=${postId}`,
-        });
-
-        const html = await res.text();
-        const $ = cheerio.load(html);
-
-        const episodes: Episode[] = [];
-
-        $("li").each((_, el) => {
-          const url = $(el).find("a").attr("href");
-          if (!url) return;
-
-          episodes.push({
-            episode_no: episodes.length + 1,
-            slug: url.split("/").pop() || "",
-            title: $(el).text().trim(),
-            epXseason: "",
-            url,
-            thumbnail: "",
-          });
-        });
-
-        if (episodes.length === 0) break;
-
-        seasons.push({
-          label: `Season ${i}`,
-          season_no: i,
-          episodes,
-        });
-      } catch {
-        break;
-      }
-    }
-
-    return seasons;
-  }
-
-  private static async extractPlayers(urls: string[]) {
-    const results: string[] = [];
-
-    for (let url of urls) {
-      if (url.startsWith("//")) url = "https:" + url;
-
-      try {
-        const $ = await this.fetchHtml(url);
-        const iframe = $("iframe").attr("src");
-
-        if (iframe) {
-          results.push(iframe.startsWith("//") ? "https:" + iframe : iframe);
-        }
-      } catch (_err) {}
-    }
-
-    return results;
-  }
-
-  private static async extractSource(url: string): Promise<DirectSource | null> {
-    if (url.includes("as-cdn")) return await getAsCdnSource(url);
-    if (url.includes("rubystream")) return await getRubystmSource(url);
+import { animesalt as BASE } from "../../origins";
+import { extractSource, extractSources } from "../embeds";
+import { loadHtml } from "../embeds/http";
+
+type AnimeCard = {
+  title: string;
+  slug: string;
+  poster: string;
+  url: string;
+  type: "movie" | "series";
+};
+
+type Episode = {
+  episode_no: number;
+  slug: string;
+  title: string;
+  epXseason: string;
+  url: string;
+  thumbnail: string;
+};
+
+const LIST_TTL = 43_200;
+const EMBEDS_TTL = 86_400;
+const SERIES_TTL = 3600 * 24 * 3;
+const REFERER = `${BASE}/`;
+
+const absolute = (href: string) => new URL(href, BASE).href;
+const load = (path: string) => loadHtml(absolute(path));
+const slugOf = (url: string) => new URL(url, BASE).pathname.split("/").filter(Boolean).pop() ?? "";
+const image = (src: string | undefined) => (src && !src.startsWith("data:") ? absolute(src) : "");
+const paged = (path: string, page: number) => (page > 1 ? `${path}page/${page}/` : path);
+const season = (season_no: number, episodes: Episode[]) => ({
+  label: `Season ${season_no}`,
+  season_no,
+  episodes,
+});
+
+async function cached<T>(key: string, ttl: number, producer: () => Promise<T | null>) {
+  try {
+    return (await Cache.remember(`animesalt:${key}`, ttl, producer)).data;
+  } catch (err) {
+    Logger.warn(`[animesalt] ${(err as Error).message}`);
     return null;
   }
-
-  private static async getSourcesFromPage($: cheerio.CheerioAPI) {
-    const iframeUrls = $("iframe")
-      .map((_, el) => $(el).attr("src"))
-      .get()
-      .filter(Boolean);
-
-    const players = await this.extractPlayers(iframeUrls);
-
-    const sources: DirectSource[] = [];
-
-    for (const p of players) {
-      const src = await this.extractSource(p);
-      if (src) sources.push(src);
-    }
-
-    return { embeds: players, sources };
-  }
 }
+
+function parseCards($: CheerioAPI): AnimeCard[] {
+  return $("#movies-a li")
+    .map((_, el): AnimeCard | null => {
+      const card = $(el);
+      const href = card.find("a.lnk-blk").attr("href");
+      if (!href) return null;
+      const img = card.find("img");
+      const url = absolute(href);
+      return {
+        title: card.find(".entry-title").text().trim(),
+        slug: slugOf(url),
+        poster: image(img.attr("data-src") || img.attr("src")),
+        url,
+        type: url.includes("/series/") ? "series" : "movie",
+      };
+    })
+    .get();
+}
+
+function parseEpisodes($: CheerioAPI, selector: string): Episode[] {
+  return $(selector)
+    .map((index, el): Episode | null => {
+      const item = $(el);
+      const href = item.find("a.lnk-blk").attr("href");
+      if (!href) return null;
+      const img = item.find("img");
+      const url = absolute(href);
+      const slug = slugOf(url);
+      return {
+        episode_no: Number(item.find(".num-epi").text().trim().split("x").pop()) || index + 1,
+        slug,
+        title: item.find(".entry-title").text().trim(),
+        epXseason: slug.match(/(\d+x\d+)$/)?.[1] ?? "",
+        url,
+        thumbnail: image(img.attr("data-src") || img.attr("src")),
+      };
+    })
+    .get();
+}
+
+function parseEmbeds($: CheerioAPI) {
+  return $("#aa-options iframe")
+    .map((_, el) => $(el).attr("data-src") || $(el).attr("src"))
+    .get()
+    .map(absolute);
+}
+
+async function scrapeHome() {
+  const $ = await load("/");
+  const lastEpisodes = $(".widget_list_episodes li")
+    .map((_, el) => {
+      const card = $(el);
+      const href = card.find("a.lnk-blk").attr("href");
+      if (!href) return null;
+      const img = card.find("img");
+      const url = absolute(href);
+      const season = card.find(".post-ql").text().match(/\d+/)?.[0];
+      const episode = card.find(".year").text().match(/\d+/)?.[0];
+      return {
+        title: card.find(".entry-title").text().trim(),
+        slug: slugOf(url),
+        url,
+        thumbnail: image(img.attr("data-src") || img.attr("src")),
+        epXseason: season && episode ? `${season}x${episode}` : "",
+        ago: "",
+      };
+    })
+    .get();
+  return lastEpisodes.length ? { lastEpisodes } : null;
+}
+
+async function scrapeMovie(slug: string) {
+  const $ = await load(`/movies/${slug}/`);
+  const title = $("h1").first().text().trim();
+  if (!title) return null;
+  const poster = $(".bd img").first();
+  return {
+    title,
+    poster: image(poster.attr("data-src") || poster.attr("src")),
+    description: $("#overview-text p").text().trim(),
+    downloadLinks: $("table tbody tr")
+      .map((_, el) => {
+        const cells = $(el).find("td");
+        return {
+          server: cells.eq(0).text().trim(),
+          quality: cells.eq(2).text().trim(),
+          url: $(el).find("a").attr("href")?.split(/\s/)[0],
+        };
+      })
+      .get(),
+    embeds: parseEmbeds($),
+  };
+}
+
+async function scrapeSeries(slug: string) {
+  const $ = await load(`/series/${slug}/`);
+  const title = $("h1").first().text().trim();
+  if (!title) return null;
+
+  const current = parseEpisodes($, "#episode_by_temp li");
+  const buttons = $(".season-btn[data-season][data-post]")
+    .map((_, el) => ({
+      number: Number($(el).attr("data-season")),
+      post: $(el).attr("data-post") ?? "",
+      active: $(el).hasClass("active"),
+    }))
+    .get()
+    .filter(({ number }) => number > 0);
+
+  const fetchSeason = async (number: number, post: string) => {
+    const query = new URLSearchParams({
+      action: "action_select_season",
+      season: `${number}`,
+      post,
+    });
+    return parseEpisodes(await load(`/wp-admin/admin-ajax.php?${query}`), "li");
+  };
+
+  if (!buttons.length) return { title, seasons: current.length ? [season(1, current)] : [] };
+  const seasons = await Promise.all(
+    buttons.map(async ({ number, post, active }) =>
+      season(number, active ? current : await fetchSeason(number, post)),
+    ),
+  );
+  return { title, seasons };
+}
+
+export const AnimeSalt = {
+  home: () => cached("home", LIST_TTL, scrapeHome),
+
+  search: (query: string, page = 1) =>
+    cached(`search:${query}:${page}`, LIST_TTL, async () => {
+      const $ = await load(`${paged("/", page)}?${new URLSearchParams({ s: query })}`);
+      return { data: parseCards($) };
+    }),
+
+  category: (type: string, page = 1, filter?: string) =>
+    cached(`category:${type}:${filter || "all"}:${page}`, LIST_TTL, async () => {
+      const path = paged(`/category/${type.split("/").map(encodeURIComponent).join("/")}/`, page);
+      const $ = await load(filter ? `${path}?${new URLSearchParams({ type: filter })}` : path);
+      return {
+        pagination: {
+          current: page,
+          start: 1,
+          end: Number($("nav.pagination a.page-link").last().text().trim()) || 1,
+        },
+        data: parseCards($),
+      };
+    }),
+
+  movies: (page = 1) =>
+    cached(`movies:${page}`, LIST_TTL, async () => ({
+      data: parseCards(await load(paged("/movies/", page))),
+    })),
+
+  async movieInfo(slug: string) {
+    const movie = await cached(`movie:${slug}`, EMBEDS_TTL, () => scrapeMovie(slug));
+    return movie && { ...movie, sources: await extractSources(movie.embeds, REFERER) };
+  },
+
+  seriesInfo: (slug: string) => cached(`series:${slug}`, SERIES_TTL, () => scrapeSeries(slug)),
+
+  async streams(slug: string) {
+    const embeds = await cached(`episode:${slug}`, EMBEDS_TTL, async () =>
+      parseEmbeds(await load(`/episode/${slug}/`)),
+    );
+    return embeds?.map(async (url) => {
+      const source = await extractSource(url, REFERER);
+      return (
+        source && {
+          id: url,
+          title: "Auto",
+          url,
+          directUrl: source.url,
+          quality: source.label,
+          type: source.type,
+          headers: source.headers,
+          proxiedUrl: source.proxiedUrl,
+        }
+      );
+    });
+  },
+};

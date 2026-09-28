@@ -1,47 +1,22 @@
 {
   "name": "cooren",
-  "module": "src/index.ts",
   "type": "module",
   "private": true,
   "scripts": {
     "dev": "bun run src/index.ts",
-    "dev:bun": "bun run src/index.ts",
+    "hot": "bun run --hot src/index.ts",
     "dev:node": "tsx --env-file=.env src/index.ts",
     "dev:deno": "deno run -A --env --unstable-fs --sloppy-imports src/index.ts",
-    "hot": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
     "start:node": "node dist/index.js",
-    "build:node": "tsc --project tsconfig.json --outDir dist",
-    "build:bun": "bun build src/index.ts --outdir dist --minify --sourcemap",
-    "test": "bun run scripts/tests/index.ts",
-    "test:vitest": "vitest",
-    "test:jest": "jest",
-    "lint": "eslint src",
-    "lint:fix": "eslint src --fix",
-    "format": "prettier --write src",
-    "format:check": "prettier --check src"
-  },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/bun": "latest",
-    "@types/jest": "^30.0.0",
-    "@types/node": "^25.5.0",
-    "@types/string-similarity": "^4.0.2",
-    "@types/tough-cookie": "^4.0.5",
-    "eslint": "^10.0.2",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-prettier": "^5.5.5",
-    "jest": "^30.3.0",
-    "prettier": "^3.8.1",
-    "ts-jest": "^29.4.6",
-    "ts-node": "^10.9.2",
-    "tsx": "^4.21.0",
-    "typescript": "^5.0.0",
-    "typescript-eslint": "^8.56.1",
-    "vitest": "^4.1.2"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "build:bun": "bun build src/index.ts src/providers/anime/anivexa/extractors/proof.js --target bun --outdir dist --entry-naming [name].[ext] --minify --sourcemap --packages external",
+    "build:node": "bun build src/index.ts src/providers/anime/anivexa/extractors/proof.js --target node --outdir dist --entry-naming [name].[ext] --packages external",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@elysiajs/cors": "^1.4.1",
@@ -49,16 +24,23 @@
     "@elysiajs/openapi": "^1.4.14",
     "@neondatabase/serverless": "^1.1.0",
     "@upstash/redis": "^1.36.3",
-    "axios": "^1.13.6",
-    "axios-cookiejar-support": "^6.0.5",
     "cheerio": "^1.2.0",
     "elysia": "^1.4.27",
-    "puppeteer": "^24.39.1",
     "puppeteer-real-browser": "^1.4.4",
-    "string-similarity": "^4.0.4",
-    "tmdb-ts": "^2.3.0",
-    "tough-cookie": "^6.0.0",
-    "wreq-js": "^3.2.0",
-    "zod": "^4.3.6"
+    "wreq-js": "^3.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "latest",
+    "@types/node": "^25.5.0",
+    "eslint": "^10.0.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "globals": "^17.12.0",
+    "prettier": "^3.8.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.56.1",
+    "vitest": "^4.1.2"
   }
 }

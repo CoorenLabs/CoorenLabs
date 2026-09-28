@@ -4,7 +4,6 @@ import { tidalRoutes } from "./tidal/route";
 export const musicRoutes = new Elysia({ prefix: "/music" })
   .use(tidalRoutes)
 
-  // ─── Overview Endpoint ────────────────────────────────────────────────────────
   .get(
     "/",
     () => ({

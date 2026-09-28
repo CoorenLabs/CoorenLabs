@@ -1,66 +1,11 @@
 import crypto from "node:crypto";
 import { availableParallelism } from "node:os";
-import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
+import { fetchJson, fetchText, UA } from "../core/http.js";
+import { scriptStrings } from "../core/utils.js";
+import { solveProof } from "./proof.js";
 
-const DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
-function getScriptStrings(script) {
-  const strings = [];
-  let index = 0;
-  let previous = "";
-  while (index < script.length) {
-    const char = script[index];
-    if (char === "/" && script[index + 1] === "/") {
-      index = script.indexOf("\n", index + 2);
-      if (index < 0) break;
-      continue;
-    }
-    if (char === "/" && script[index + 1] === "*") {
-      index = script.indexOf("*/", index + 2);
-      if (index < 0) break;
-      index += 2;
-      continue;
-    }
-    if (char === "/" && /[=(:,[!&|?{};]/.test(previous)) {
-      index++;
-      let inClass = false;
-      while (index < script.length) {
-        if (script[index] === "\\") {
-          index += 2;
-          continue;
-        }
-        if (script[index] === "[") inClass = true;
-        if (script[index] === "]") inClass = false;
-        if (script[index] === "/" && !inClass) {
-          index++;
-          while (/[a-z]/i.test(script[index] ?? "")) index++;
-          break;
-        }
-        index++;
-      }
-      continue;
-    }
-    if (char !== "'" && char !== '"') {
-      if (!/\s/.test(char)) previous = char;
-      index++;
-      continue;
-    }
-    const quote = char;
-    let value = "";
-    index++;
-    while (index < script.length && script[index] !== quote) {
-      if (script[index] === "\\" && index + 1 < script.length) value += script[index++];
-      value += script[index++];
-    }
-    strings.push(value.replace(/\\([\\'"bnfrtv])/g, (_, escaped) => ({ b: "\b", n: "\n", f: "\f", r: "\r", t: "\t", v: "\v" }[escaped] ?? escaped)));
-    index++;
-  }
-  return [...new Set(strings)];
-}
-
-function getTemplateSuffixes(script) {
-  return [...script.matchAll(/`[^`]*\$\{[^}]+\}([^`]+)`/g)].map((match) => match[1]);
-}
+const LABEL = "BabaStream";
 
 function parseConfig(html) {
   for (const match of html.matchAll(/\b(?:var|let|const)\s+\w+\s*=\s*(\{[^;]+\})\s*;/g)) {
@@ -72,35 +17,55 @@ function parseConfig(html) {
   return null;
 }
 
-function getApiRoutes(html) {
-  const routes = [...html.matchAll(/fetch\(\s*["']([^"']+)["']/g)].map((match) => match[1]);
+function apiRoutes(html) {
+  const routes = [...html.matchAll(/["'](\/[\w/-]*(?:resolve|verify)[\w/-]*)["']/gi)].map(
+    (match) => match[1],
+  );
   return {
     resolve: routes.find((route) => /resolve/i.test(route)) ?? null,
     verify: routes.find((route) => /verify/i.test(route)) ?? null,
   };
 }
 
-function getCryptoOptions(html, key) {
-  const algorithm = html.match(/importKey\([^,]+,[^,]+,\s*\{\s*name\s*:\s*["'](AES-[A-Z]+)["']/i)?.[1];
+function cipherOptions(html, key) {
+  const algorithm = html.match(
+    /importKey\([^,]+,[^,]+,\s*\{\s*name\s*:\s*["'](AES-[A-Z]+)["']/i,
+  )?.[1];
   const ivLength = Number(html.match(/getRandomValues\(new Uint8Array\((\d+)\)\)/)?.[1]);
   const tagLength = Number(html.match(/tagLength\s*:\s*(\d+)/)?.[1]) || 128;
   if (!algorithm || !Number.isInteger(ivLength) || ivLength < 1 || !key.length) return null;
-  return { cipher: `aes-${key.length * 8}-${algorithm.slice(4).toLowerCase()}`, ivLength, tagLength: tagLength / 8 };
+  return {
+    cipher: `aes-${key.length * 8}-${algorithm.slice(4).toLowerCase()}`,
+    ivLength,
+    tagLength: tagLength / 8,
+  };
 }
 
 function encrypt(value, key, options) {
   const iv = crypto.randomBytes(options.ivLength);
-  const cipher = crypto.createCipheriv(options.cipher, key, iv, { authTagLength: options.tagLength });
-  return Buffer.concat([iv, cipher.update(value, "utf8"), cipher.final(), cipher.getAuthTag()]).toString("base64");
+  const cipher = crypto.createCipheriv(options.cipher, key, iv, {
+    authTagLength: options.tagLength,
+  });
+  return Buffer.concat([
+    iv,
+    cipher.update(value, "utf8"),
+    cipher.final(),
+    cipher.getAuthTag(),
+  ]).toString("base64");
 }
 
 function decrypt(value, key, options) {
   const raw = Buffer.from(value, "base64");
   const tagStart = raw.length - options.tagLength;
   if (tagStart <= options.ivLength) throw new Error("BabaStream encrypted payload is invalid");
-  const decipher = crypto.createDecipheriv(options.cipher, key, raw.subarray(0, options.ivLength), { authTagLength: options.tagLength });
+  const decipher = crypto.createDecipheriv(options.cipher, key, raw.subarray(0, options.ivLength), {
+    authTagLength: options.tagLength,
+  });
   decipher.setAuthTag(raw.subarray(tagStart));
-  return Buffer.concat([decipher.update(raw.subarray(options.ivLength, tagStart)), decipher.final()]).toString("utf8");
+  return Buffer.concat([
+    decipher.update(raw.subarray(options.ivLength, tagStart)),
+    decipher.final(),
+  ]).toString("utf8");
 }
 
 function seededHex(value, length) {
@@ -121,136 +86,142 @@ function seededHex(value, length) {
   return output.slice(0, length);
 }
 
-function solveProof(salt, target) {
-  for (let nonce = 0; ; nonce++) {
-    const hash = crypto.createHash("sha256").update(`${salt}${nonce}`).digest("hex");
-    if (hash.startsWith(target)) return nonce;
-  }
-}
-
-if (!isMainThread && workerData?.babastreamProofs) {
-  try {
-    parentPort.postMessage(workerData.babastreamProofs.map(({ index, salt, target }) => ({ index, nonce: solveProof(salt, target) })));
-  } catch (error) {
-    throw error;
-  } finally {
-    parentPort.close();
-  }
+function runWorker(batch) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./proof.js", import.meta.url), {
+      workerData: { proofs: batch },
+    });
+    worker.once("message", resolve);
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code !== 0) reject(new Error(`BabaStream proof worker exited with code ${code}`));
+    });
+  });
 }
 
 async function solveProofs(proofs) {
-  if (proofs.length < 2 || !isMainThread) return proofs.map(({ index, salt, target }) => ({ index, nonce: solveProof(salt, target) }));
-  const workerCount = Math.min(availableParallelism(), proofs.length);
-  const batches = Array.from({ length: workerCount }, () => []);
-  proofs.forEach((proof, index) => batches[index % workerCount].push(proof));
-  const result = await Promise.all(batches.map((batch) => new Promise((resolve, reject) => {
-    const worker = new Worker(new URL(import.meta.url), {
-      workerData: { babastreamProofs: batch },
-      execArgv: process.execArgv.filter((argument) => !argument.startsWith("--input-type")),
-    });
-    let completed = false;
-    worker.once("message", (value) => {
-      completed = true;
-      resolve(value);
-    });
-    worker.once("error", reject);
-    worker.once("exit", (code) => {
-      if (!completed && code !== 0) reject(new Error(`BabaStream proof worker exited with code ${code}`));
-    });
-  })));
-  return result.flat().sort((left, right) => left.index - right.index);
+  if (proofs.length < 2)
+    return proofs.map(({ index, salt, target }) => ({ index, nonce: solveProof(salt, target) }));
+  const workers = Math.min(availableParallelism(), proofs.length);
+  const batches = Array.from({ length: workers }, () => []);
+  proofs.forEach((proof, index) => batches[index % workers].push(proof));
+  const results = await Promise.all(batches.map(runWorker));
+  return results.flat().sort((left, right) => left.index - right.index);
 }
 
 async function solveChallenge(payload) {
   if (Array.isArray(payload.challenges)) {
     const proofs = payload.challenges.map((challenge, index) => {
-      if (challenge?.protocol !== "sha256-pow") throw new Error(`Unsupported BabaStream challenge protocol: ${challenge?.protocol}`);
+      if (challenge?.protocol !== "sha256-pow")
+        throw new Error(`Unsupported BabaStream challenge protocol: ${challenge?.protocol}`);
       return { index, salt: challenge.payload.salt, target: challenge.payload.target };
     });
     return (await solveProofs(proofs)).map(({ nonce }) => ({ nonce }));
   }
   const { token, challenge } = payload;
-  if (!token || !Number.isInteger(challenge?.c) || !Number.isInteger(challenge?.s) || !Number.isInteger(challenge?.d)) {
+  if (
+    !token ||
+    !Number.isInteger(challenge?.c) ||
+    !Number.isInteger(challenge?.s) ||
+    !Number.isInteger(challenge?.d)
+  )
     throw new Error("BabaStream challenge is invalid");
-  }
-  const proofs = Array.from({ length: challenge.c }, (_, index) => {
-    const counter = index + 1;
-    return { index, salt: seededHex(`${token}${counter}`, challenge.s), target: seededHex(`${token}${counter}d`, challenge.d) };
-  });
+  const proofs = Array.from({ length: challenge.c }, (_, index) => ({
+    index,
+    salt: seededHex(`${token}${index + 1}`, challenge.s),
+    target: seededHex(`${token}${index + 1}d`, challenge.d),
+  }));
   return (await solveProofs(proofs)).map(({ nonce }) => nonce);
 }
 
-async function fetchText(fetchImpl, url, headers) {
-  const response = await fetchImpl(url, { headers });
-  if (!response.ok) throw new Error(`BabaStream HTTP ${response.status}: ${url}`);
-  return response.text();
-}
-
-async function fetchJson(fetchImpl, url, options) {
-  const response = await fetchImpl(url, options);
-  if (!response.ok) throw new Error(`BabaStream HTTP ${response.status}: ${url}`);
-  return response.json();
-}
-
-export function canExtractBabaStream(url) {
-  return /babastream\.[^/]+\/embed\//i.test(String(url));
-}
-
-export async function extractBabaStreamDetails(embedUrl, { fetchImpl = fetch, userAgent = DEFAULT_USER_AGENT, referer } = {}) {
-  const pageUrl = new URL(String(embedUrl));
-  const pageHeaders = {
+async function capToken(html, pageUrl, config, userAgent) {
+  const scripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(
+    (match) => new URL(match[1], pageUrl).href,
+  );
+  const sources = await Promise.all(
+    scripts.map((url) =>
+      fetchText(url, {
+        label: LABEL,
+        headers: { "User-Agent": userAgent, Referer: pageUrl.href },
+      }).catch(() => ""),
+    ),
+  );
+  const widget = sources.find(
+    (script) => /challenge/i.test(script) && /redeem/i.test(script) && /SHA-256/i.test(script),
+  );
+  const strings = widget
+    ? [
+        ...scriptStrings(widget),
+        ...[...widget.matchAll(/`[^`]*\$\{[^}]+\}([^`]+)`/g)].map((match) => match[1]),
+      ]
+    : [];
+  if (!strings.includes("challenge") || !strings.includes("redeem"))
+    throw new Error("BabaStream challenge client not found");
+  const headers = {
+    "Content-Type": "application/json",
     "User-Agent": userAgent,
-    "Accept": "text/html,*/*",
-    "Referer": referer ?? `${pageUrl.origin}/`,
+    Referer: pageUrl.href,
   };
-  const html = await fetchText(fetchImpl, pageUrl, pageHeaders);
+  const challenge = await fetchJson(new URL("challenge", config.cap), {
+    label: LABEL,
+    method: "POST",
+    headers,
+  });
+  const redeemed = await fetchJson(new URL("redeem", config.cap), {
+    label: LABEL,
+    method: "POST",
+    headers,
+    body: JSON.stringify({ token: challenge.token, solutions: await solveChallenge(challenge) }),
+  });
+  if (!redeemed?.success || !redeemed.token)
+    throw new Error("BabaStream challenge verification failed");
+  return redeemed.token;
+}
+
+export async function extractBabaStream(embedUrl, { userAgent = UA, referer } = {}) {
+  const pageUrl = new URL(String(embedUrl));
+  const html = await fetchText(pageUrl, {
+    label: LABEL,
+    headers: {
+      "User-Agent": userAgent,
+      Accept: "text/html,*/*",
+      Referer: referer ?? `${pageUrl.origin}/`,
+    },
+  });
   const config = parseConfig(html);
   if (!config?.cap) throw new Error(`BabaStream config not found: ${embedUrl}`);
   const key = Buffer.from(config.pk, "base64");
-  const cryptoOptions = getCryptoOptions(html, key);
-  const routes = getApiRoutes(html);
-  if (!cryptoOptions || !routes.resolve || !routes.verify) throw new Error(`BabaStream client routes not found: ${embedUrl}`);
-  const encryptedRequest = async (route, body) => {
-    const response = await fetchJson(fetchImpl, new URL(route, pageUrl), {
+  const options = cipherOptions(html, key);
+  const routes = apiRoutes(html);
+  if (!options || !routes.resolve || !routes.verify)
+    throw new Error(`BabaStream client routes not found: ${embedUrl}`);
+  const call = async (route, body) => {
+    const response = await fetchJson(new URL(route, pageUrl), {
+      label: LABEL,
       method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": userAgent, "Referer": pageUrl.href },
-      body: JSON.stringify({ s: config.sid, d: encrypt(JSON.stringify(body), key, cryptoOptions) }),
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": userAgent,
+        Referer: pageUrl.href,
+      },
+      body: JSON.stringify({ s: config.sid, d: encrypt(JSON.stringify(body), key, options) }),
     });
     if (!response?.d) throw new Error("BabaStream response is missing encrypted data");
-    return JSON.parse(decrypt(response.d, key, cryptoOptions));
+    return JSON.parse(decrypt(response.d, key, options));
   };
-  let resolved = await encryptedRequest(routes.resolve, { ts: Date.now() });
+  let resolved = await call(routes.resolve, { ts: Date.now() });
   if (resolved?.t === "error" && /verify/i.test(resolved.m ?? "")) {
-    const capScripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map((match) => new URL(match[1], pageUrl).href);
-    const widget = (await Promise.all(capScripts.map(async (url) => {
-      try { return await fetchText(fetchImpl, url, { "User-Agent": userAgent, "Referer": pageUrl.href }); } catch { return null; }
-    }))).find((script) => /challenge/i.test(script) && /redeem/i.test(script) && /SHA-256/i.test(script));
-    const widgetStrings = widget ? [...getScriptStrings(widget), ...getTemplateSuffixes(widget)] : [];
-    const challengePath = widgetStrings.find((value) => value === "challenge");
-    const redeemPath = widgetStrings.find((value) => value === "redeem");
-    if (!widget || !challengePath || !redeemPath) throw new Error("BabaStream challenge client not found");
-    const capHeaders = { "Content-Type": "application/json", "User-Agent": userAgent, "Referer": pageUrl.href };
-    const challenge = await fetchJson(fetchImpl, new URL(challengePath, config.cap), { method: "POST", headers: capHeaders });
-    const solutions = await solveChallenge(challenge);
-    const redeemed = await fetchJson(fetchImpl, new URL(redeemPath, config.cap), {
-      method: "POST",
-      headers: capHeaders,
-      body: JSON.stringify({ token: challenge.token, solutions }),
-    });
-    if (!redeemed?.success || !redeemed.token) throw new Error("BabaStream challenge verification failed");
-    const verified = await encryptedRequest(routes.verify, { ts: Date.now(), token: redeemed.token, mode: "invisible" });
+    const token = await capToken(html, pageUrl, config, userAgent);
+    const verified = await call(routes.verify, { ts: Date.now(), token, mode: "invisible" });
     if (verified?.t !== "ok") throw new Error("BabaStream cap verification failed");
-    resolved = await encryptedRequest(routes.resolve, { ts: Date.now() });
+    resolved = await call(routes.resolve, { ts: Date.now() });
   }
   if (!resolved?.u) throw new Error(resolved?.m || "BabaStream did not return a stream");
-  return {
-    url: resolved.u,
-    type: /\.m3u8(?:$|[?&])/i.test(resolved.u) ? "hls" : resolved.t === "embed" ? "embed" : "mp4",
-    origin: pageUrl.origin,
-  };
-}
-
-export async function extractBabaStream(embedUrl, options = {}) {
-  const source = await extractBabaStreamDetails(embedUrl, options);
-  return [source];
+  return [
+    {
+      url: resolved.u,
+      type: /\.m3u8(?:$|[?&])/i.test(resolved.u) ? "hls" : resolved.t === "embed" ? "embed" : "mp4",
+      referer: `${pageUrl.origin}/`,
+    },
+  ];
 }

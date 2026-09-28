@@ -7,6 +7,7 @@ export type Source = {
   poster?: string;
   thumbnail?: string;
   headers?: Record<string, string>;
+  proxiedUrl?: string;
 };
 
 export type Caption = {
@@ -14,7 +15,6 @@ export type Caption = {
   langCode?: string;
   url: string;
   delay: number;
-  size?: number;
 };
 
 export type ServerSource = {
@@ -23,7 +23,9 @@ export type ServerSource = {
   subtitles?: Caption[];
 };
 
-export type Response<T> = {
+export type Extracted = Omit<ServerSource, "name">;
+
+export type Result<T> = {
   success: boolean;
   status: number;
   data?: T;

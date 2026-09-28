@@ -2,79 +2,44 @@ import { neon } from "@neondatabase/serverless";
 import { DATABASE_URL, REMAP_REFRESH_INTERVAL } from "./config";
 import { Logger } from "./logger";
 
-export interface RemapRow {
+type RemapRow = {
   anilist_id: number;
   name?: string;
   logo?: string;
   banner?: string;
   description?: string;
   poster?: string;
-  banner_image?: string; // fallback for ani.zip images
-  clear_logo?: string; // fallback for ani.zip images
+  banner_image?: string;
+  clear_logo?: string;
   [key: string]: any;
-}
+};
 
 class RemapManager {
-  private remaps: Record<number, RemapRow> = {};
-  private sql = DATABASE_URL ? neon(DATABASE_URL) : null;
-  private interval: Timer | null = null;
+  private remaps = new Map<number, RemapRow>();
+  private readonly sql = DATABASE_URL ? neon(DATABASE_URL) : null;
 
-  /**
-   * Start the remap loader. Fetches initially and then periodically.
-   */
-  public async init() {
+  async init() {
     if (!this.sql) {
-      Logger.warn("[RemapManager] No DATABASE_URL provided. Remapping disabled.");
+      Logger.warn("[RemapManager] DATABASE_URL is not set; remapping is disabled");
       return;
     }
-
-    await this.loadRemaps();
-
-    // Refresh every X minutes
-    this.interval = setInterval(() => {
-      this.loadRemaps();
-    }, REMAP_REFRESH_INTERVAL);
-
-    Logger.info(`[RemapManager] Initialized with refresh interval of ${REMAP_REFRESH_INTERVAL}ms`);
+    await this.load();
+    setInterval(() => void this.load(), REMAP_REFRESH_INTERVAL);
+    Logger.info(`[RemapManager] Refreshing every ${REMAP_REFRESH_INTERVAL}ms`);
   }
 
-  /**
-   * Fetch remaps from the database and update the cache.
-   */
-  private async loadRemaps() {
-    if (!this.sql) return;
-
+  private async load() {
     try {
-      const data = (await this.sql`SELECT * FROM remaps`) as RemapRow[];
-      const newRemaps: Record<number, RemapRow> = {};
-
-      data.forEach((row) => {
-        newRemaps[row.anilist_id] = row;
-      });
-
-      this.remaps = newRemaps;
-      Logger.info(`[RemapManager] Loaded ${Object.keys(this.remaps).length} remaps from DB`);
+      const rows = (await this.sql!`SELECT * FROM remaps`) as RemapRow[];
+      this.remaps = new Map(rows.map((row) => [Number(row.anilist_id), row]));
+      Logger.info(`[RemapManager] Loaded ${this.remaps.size} remaps`);
     } catch (err) {
-      Logger.error(`[RemapManager] Error loading remaps: ${String(err)}`);
+      Logger.error(`[RemapManager] Failed to load remaps: ${String(err)}`);
     }
   }
 
-  /**
-   * Get remap data for a specific AniList ID.
-   */
-  public getRemap(anilistId: number | string): RemapRow | undefined {
-    const id = typeof anilistId === "string" ? parseInt(anilistId, 10) : anilistId;
-    return this.remaps[id];
-  }
-
-  /**
-   * Stop the refresh interval.
-   */
-  public stop() {
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
-    }
+  getRemap(anilistId: number | string): RemapRow | undefined {
+    return this.remaps.get(Number(anilistId));
   }
 }
 

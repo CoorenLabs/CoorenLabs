@@ -1,293 +1,204 @@
 import { getMedia } from "../core/anilist.js";
-import { findVideoExtractor } from "../extractors/index.js";
+import { memo, TTL } from "../core/cache.js";
+import { fetchText, HTML_ACCEPT, parseJson, upstreamError } from "../core/http.js";
 import {
+  alignEpisodes,
+  attr,
+  bestDice,
   buildTitles,
-  decodeEntities,
-  diceCoeff,
   episodeMeta,
+  escapeRegex,
   expectedCount,
-  json,
-} from "../core/new-provider-utils.js";
-import { get, set, isFresh, SHOW_IDENTITY_TTL } from "../core/smartcache.js";
+  FAMILY_FULL,
+  originOf,
+  pickConfident,
+  searchVariants,
+  stripTags,
+  watchId,
+} from "../core/utils.js";
+import { resolveEmbed } from "../extractors/index.js";
 
 const BASE = "https://aniwaves.ru";
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
+const LABEL = "AniWaves";
+const TYPES = {
+  TV: "tv",
+  TV_SHORT: "tv",
+  MOVIE: "movie",
+  OVA: "ova",
+  ONA: "ona",
+  SPECIAL: "special",
+};
 
-function escapeRegex(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function stripHtml(value = "") {
-  return decodeEntities(value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " "));
-}
-
-function attribute(tag, name) {
-  const match = String(tag).match(new RegExp(`\\b${escapeRegex(name)}=["']([^"']*)["']`, "i"));
-  return match ? decodeEntities(match[1]) : "";
-}
-
-function formatName(value) {
-  const name = String(value || "").toUpperCase();
-  if (name.includes("SPECIAL")) return "special";
-  if (name === "TV" || name === "TV_SHORT") return "tv";
-  if (name === "MOVIE") return "movie";
-  if (name === "OVA") return "ova";
-  if (name === "ONA") return "ona";
-  if (name === "SPECIAL") return "special";
-  return "";
-}
-
-function searchQueries(titles) {
-  const queries = new Set();
-  for (const raw of titles.slice(0, 8)) {
-    const title = String(raw || "").replace(/\s+/g, " ").trim();
-    if (!title) continue;
-    queries.add(title);
-    const plain = title.replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
-    if (plain.length >= 3) queries.add(plain);
-    const words = plain.split(/\s+/).filter(Boolean);
-    if (words.length > 4) queries.add(words.slice(0, 4).join(" "));
-    if (words.length > 6) queries.add(words.slice(0, 6).join(" "));
-    const family = plain
-      .replace(/\b(?:the\s+)?final\s+chapters?\b/gi, " ")
-      .replace(/\bfinal\s+(?:arc|edition)\b/gi, " ")
-      .replace(/\b(?:kanketsu|kouhen|zenpen)\s*(?:hen)?\b/gi, " ")
-      .replace(/\b(?:the\s+)?movie\b/gi, " ")
-      .replace(/\b(?:season|part|cour|chapter)\s*(?:\d+|one|two|three|four|final)?\b/gi, " ")
-      .replace(/\b(?:final|special)\s*(?:\d+|one|two|three|four)?\b/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (family.length >= 3) queries.add(family);
-  }
-  return [...queries].filter((query) => query.length >= 3).slice(0, 18);
-}
-
-async function fetchText(url, headers = {}) {
-  const response = await fetch(url, {
+function page(url) {
+  return fetchText(url, {
+    label: LABEL,
     headers: {
       "User-Agent": UA,
       "Accept-Language": "en-US,en;q=0.9",
-      ...headers,
+      Accept: HTML_ACCEPT,
+      Referer: `${BASE}/`,
     },
   });
-  const raw = await response.text();
-  if (!response.ok) {
-    const error = new Error(`AniWaves HTTP ${response.status}: ${url}`);
-    error.rawBody = raw;
-    throw error;
-  }
-  return raw;
 }
 
-async function fetchAjax(path, referer) {
+async function ajax(path, referer) {
   const raw = await fetchText(`${BASE}${path}`, {
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "X-Requested-With": "XMLHttpRequest",
-    "Referer": referer,
+    label: LABEL,
+    headers: {
+      "User-Agent": UA,
+      "Accept-Language": "en-US,en;q=0.9",
+      Accept: "application/json, text/javascript, */*; q=0.01",
+      "X-Requested-With": "XMLHttpRequest",
+      Referer: referer,
+    },
   });
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    const error = new Error(`AniWaves returned invalid JSON: ${path}`);
-    error.rawBody = raw;
-    throw error;
-  }
-  if (Number(data?.status) !== 200) {
-    const error = new Error(data?.message || `AniWaves request failed: ${path}`);
-    error.rawBody = raw;
-    throw error;
-  }
+  const data = parseJson(raw, LABEL);
+  if (Number(data?.status) !== 200)
+    throw upstreamError(data?.message || `AniWaves request failed: ${path}`, raw);
   return data.result;
 }
 
-function parseSearchCards(html) {
+function candidateType(value) {
+  const name = String(value || "").toUpperCase();
+  return name.includes("SPECIAL") ? "special" : (TYPES[name] ?? "");
+}
+
+async function search(query) {
+  const html = await page(`${BASE}/filter?keyword=${encodeURIComponent(query)}`);
   const found = new Map();
   for (const match of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
     const tag = match[1];
     if (!/\bclass=["'][^"']*\bname\b[^"']*\bd-title\b/i.test(tag)) continue;
-    const href = attribute(tag, "href");
-    const slug = href.match(/^\/watch\/([a-z0-9-]+)$/i)?.[1];
-    if (!slug || found.has(slug)) continue;
-    const siteId = Number(slug.match(/-(\d+)$/)?.[1]);
-    if (!Number.isFinite(siteId)) continue;
-    const title = stripHtml(match[2]);
-    if (!title) continue;
-    found.set(slug, {
-      slug,
-      siteId,
-      title,
-      japanese: attribute(tag, "data-jp"),
-    });
+    const slug = attr(tag, "href").match(/^\/watch\/([a-z0-9-]+)$/i)?.[1];
+    const siteId = Number(slug?.match(/-(\d+)$/)?.[1]);
+    const title = stripTags(match[2]);
+    if (!slug || found.has(slug) || !Number.isFinite(siteId) || !title) continue;
+    found.set(slug, { slug, siteId, title, japanese: attr(tag, "data-jp") });
   }
   return [...found.values()];
 }
 
-async function search(query) {
-  const html = await fetchText(`${BASE}/filter?keyword=${encodeURIComponent(query)}`, {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Referer": `${BASE}/`,
-  });
-  return parseSearchCards(html);
-}
-
 function detailField(html, label) {
-  const match = html.match(new RegExp(`<div>\\s*${escapeRegex(label)}:\\s*<span[^>]*>([\\s\\S]*?)<\\/span>`, "i"));
-  return match ? stripHtml(match[1]) : "";
-}
-
-function parseEpisodeCount(value) {
-  const numbers = [...String(value).matchAll(/\d+/g)].map((match) => Number(match[0])).filter(Number.isFinite);
-  return { available: numbers[0] ?? 0, total: numbers[1] ?? numbers[0] ?? 0 };
+  const match = html.match(
+    new RegExp(`<div>\\s*${escapeRegex(label)}:\\s*<span[^>]*>([\\s\\S]*?)<\\/span>`, "i"),
+  );
+  return match ? stripTags(match[1]) : "";
 }
 
 async function fetchDetail(candidate) {
-  const html = await fetchText(`${BASE}/watch/${candidate.slug}`, {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Referer": `${BASE}/`,
-  });
-  const premiered = detailField(html, "Premiered");
-  const aired = detailField(html, "Date aired");
-  const year = Number((aired.match(/\d{4}/)?.[0] ?? premiered.match(/\d{4}/)?.[0] ?? ""));
+  const html = await page(`${BASE}/watch/${candidate.slug}`);
+  const year = Number(
+    detailField(html, "Date aired").match(/\d{4}/)?.[0] ??
+      detailField(html, "Premiered").match(/\d{4}/)?.[0],
+  );
   return {
     ...candidate,
-    title: candidate.title || stripHtml(html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? ""),
-    type: formatName(detailField(html, "Type")),
+    type: candidateType(detailField(html, "Type")),
     year: Number.isFinite(year) ? year : null,
-    episodes: parseEpisodeCount(detailField(html, "Episodes")),
+    episodeCount: Number(detailField(html, "Episodes").match(/\d+/)?.[0]) || 0,
   };
 }
 
-function candidateTitleScore(titles, candidate) {
-  const values = [candidate.title, candidate.japanese, candidate.slug.replace(/-/g, " ")].filter(Boolean);
-  let best = 0;
-  for (const title of titles) {
-    for (const value of values) best = Math.max(best, diceCoeff(title, value));
-  }
-  return best;
-}
-
-function coverageScore(candidate, expected, status) {
-  if (!expected || expected < 1) return 0.5;
-  if (candidate.episodes.available < 1) return 0;
-  if (expected < 6) return 1;
-  const needed = status === "FINISHED" ? Math.ceil(expected * 0.8) : Math.max(1, expected - 3);
-  return Math.min(1, candidate.episodes.available / needed);
-}
-
-function validateCandidate(candidate, media, titles, expected) {
-  const titleScore = candidateTitleScore(titles, candidate);
-  const expectedType = formatName(media?.format);
-  const expectedYear = Number(media?.startDate?.year ?? media?.seasonYear ?? 0) || null;
-  if (titleScore < 0.68) return null;
-  if (expectedType && candidate.type && expectedType !== candidate.type) return null;
-  if (expectedYear && candidate.year && expectedYear !== candidate.year) return null;
-  const coverage = coverageScore(candidate, expected, media?.status);
-  if (expected >= 6 && coverage < 0.8) return null;
-  const score = titleScore * 0.72 + (expectedType && candidate.type === expectedType ? 0.14 : 0.07) + (expectedYear && candidate.year === expectedYear ? 0.1 : 0.04) + coverage * 0.04;
-  return { ...candidate, titleScore, coverage, score };
-}
-
-async function resolveSeries(anilistId, ctx = {}) {
-  const cacheKey = `np:aniwaves:${anilistId}`;
-  const cached = get(cacheKey);
-  if (isFresh(cached)) return cached.data;
-  const media = ctx.media ?? await getMedia(anilistId);
-  const titles = buildTitles(media, ctx.anizip);
-  const expected = expectedCount(media, ctx.anizip);
-  const discovered = new Map();
-  await Promise.all(searchQueries(titles).map(async (query) => {
-    try {
-      for (const candidate of await search(query)) if (!discovered.has(candidate.slug)) discovered.set(candidate.slug, candidate);
-    } catch {}
-  }));
-  const shortlist = [...discovered.values()]
-    .map((candidate) => ({ candidate, score: candidateTitleScore(titles, candidate) }))
-    .filter((item) => item.score >= 0.5)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 12)
-    .map((item) => item.candidate);
-  const details = await Promise.all(shortlist.map((candidate) => fetchDetail(candidate).catch(() => null)));
-  const valid = details
-    .filter(Boolean)
-    .map((candidate) => validateCandidate(candidate, media, titles, expected))
-    .filter(Boolean)
-    .sort((left, right) => right.score - left.score);
-  const selected = valid[0];
-  const runnerUp = valid[1];
-  if (!selected || selected.score < 0.82 || runnerUp && selected.score - runnerUp.score < 0.08) {
-    throw new Error(`AniWaves match not confident for AniList ${anilistId}`);
-  }
-  const data = {
-    siteId: selected.siteId,
-    slug: selected.slug,
-    title: selected.title,
-    score: selected.score,
-    matchScore: selected.titleScore,
-    episodeCount: selected.episodes.available,
-  };
-  set(cacheKey, data, SHOW_IDENTITY_TTL);
-  return data;
-}
-
-function parseEpisodes(html) {
-  const episodes = [];
-  const seen = new Set();
-  for (const match of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
-    const attrs = match[1];
-    const number = Number(attribute(attrs, "data-num"));
-    const sourceNumber = attribute(attrs, "data-slug") || String(number);
-    if (!Number.isFinite(number) || number < 1 || seen.has(number)) continue;
-    const ids = attribute(attrs, "data-ids");
-    if (!ids) continue;
-    seen.add(number);
-    episodes.push({
-      number,
-      sourceNumber,
-      ids,
-      title: stripHtml(match[2]).replace(/^\d+\s*/, "") || `Episode ${number}`,
-      airDate: attribute(attrs, "data-aired") || null,
-      duration: Number(attribute(attrs, "data-duration")) || null,
-      filler: attribute(attrs, "data-filler") === "1",
-      recap: attribute(attrs, "data-recap") === "1",
-      hasSub: attribute(attrs, "data-sub") === "1",
-      hasDub: attribute(attrs, "data-dub") === "1",
-    });
-  }
-  return episodes.sort((left, right) => left.number - right.number);
+function resolveSeries(anilistId, ctx = {}) {
+  return memo(`series:aniwaves:${anilistId}`, TTL.identity, async () => {
+    const media = ctx.media ?? (await getMedia(anilistId));
+    const titles = buildTitles(media, ctx.anizip);
+    const discovered = new Map();
+    await Promise.all(
+      searchVariants(titles, {
+        maxTitles: 8,
+        maxQueries: 18,
+        cuts: [
+          [4, 4],
+          [6, 6],
+        ],
+        family: FAMILY_FULL,
+      }).map(async (query) => {
+        for (const candidate of await search(query).catch(() => []))
+          if (!discovered.has(candidate.slug)) discovered.set(candidate.slug, candidate);
+      }),
+    );
+    const shortlist = [...discovered.values()]
+      .map((candidate) => ({
+        ...candidate,
+        titles: [candidate.title, candidate.japanese, candidate.slug.replace(/-/g, " ")].filter(
+          Boolean,
+        ),
+      }))
+      .map((candidate) => ({ candidate, score: bestDice(titles, candidate.titles) }))
+      .filter((item) => item.score >= 0.5)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 12)
+      .map((item) => item.candidate);
+    const details = await Promise.all(
+      shortlist.map((candidate) => fetchDetail(candidate).catch(() => null)),
+    );
+    const selected = pickConfident(
+      details.filter(Boolean),
+      media,
+      titles,
+      expectedCount(media, ctx.anizip),
+    );
+    if (!selected) throw new Error(`AniWaves match not confident for AniList ${anilistId}`);
+    return {
+      siteId: selected.siteId,
+      slug: selected.slug,
+      title: selected.title,
+      score: selected.score,
+      matchScore: selected.titleScore,
+      episodeCount: selected.episodeCount,
+    };
+  });
 }
 
 async function fetchEpisodes(series) {
-  const result = await fetchAjax(`/ajax/episode/list/${series.siteId}?vrf=`, `${BASE}/watch/${series.slug}`);
-  const episodes = parseEpisodes(String(result || ""));
-  if (!episodes.length) throw new Error(`AniWaves has no episodes for ${series.slug}`);
-  return episodes;
+  const html = String(
+    (await ajax(`/ajax/episode/list/${series.siteId}?vrf=`, `${BASE}/watch/${series.slug}`)) || "",
+  );
+  const episodes = new Map();
+  for (const match of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    const attrs = match[1];
+    const number = Number(attr(attrs, "data-num"));
+    const ids = attr(attrs, "data-ids");
+    if (!Number.isFinite(number) || number < 1 || episodes.has(number) || !ids) continue;
+    episodes.set(number, {
+      number,
+      sourceNumber: attr(attrs, "data-slug") || String(number),
+      ids,
+      title: stripTags(match[2]).replace(/^\d+\s*/, "") || `Episode ${number}`,
+      airDate: attr(attrs, "data-aired") || null,
+      duration: Number(attr(attrs, "data-duration")) || null,
+      filler: attr(attrs, "data-filler") === "1",
+      recap: attr(attrs, "data-recap") === "1",
+      hasSub: attr(attrs, "data-sub") === "1",
+      hasDub: attr(attrs, "data-dub") === "1",
+    });
+  }
+  if (!episodes.size) throw new Error(`AniWaves has no episodes for ${series.slug}`);
+  return [...episodes.values()].sort((left, right) => left.number - right.number);
 }
 
-function ordinal(value) {
-  const match = String(value || "").toLowerCase().match(/\b(?:part|special|chapter)\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/);
-  if (!match) return 0;
-  const word = match[1];
-  const numbers = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
-  return Number(word) || numbers[word] || 0;
+async function seriesEpisodes(anilistId, ctx) {
+  const media = ctx.media ?? (await getMedia(anilistId));
+  const series = await resolveSeries(anilistId, { ...ctx, media });
+  const expected = expectedCount(media, ctx.anizip);
+  return {
+    series,
+    expected,
+    episodes: alignEpisodes(await fetchEpisodes(series), media, expected),
+  };
 }
 
-function alignEpisodes(sourceEpisodes, media, expected) {
-  if (!expected || sourceEpisodes.length <= expected) return sourceEpisodes;
-  const targetTitles = [media?.title?.english, media?.title?.romaji, media?.title?.native].filter(Boolean);
-  const targetOrdinal = Math.max(0, ...targetTitles.map(ordinal));
-  if (targetOrdinal < 2) return sourceEpisodes;
-  const start = sourceEpisodes.findIndex((episode) => ordinal(episode.title) === targetOrdinal);
-  if (start < 0 || sourceEpisodes.length - start < expected) return sourceEpisodes;
-  return sourceEpisodes.slice(start, start + expected).map((episode, index) => ({ ...episode, number: index + 1 }));
-}
-
-function buildEpisodeLists(anilistId, sourceEpisodes, ctx, expected) {
+export async function getEpisodes(anilistId, ctx = {}) {
+  const localCtx = { ...ctx, media: ctx.media ?? (await getMedia(anilistId)) };
+  const { series, expected, episodes } = await seriesEpisodes(anilistId, localCtx);
   const sub = [];
   const dub = [];
-  for (const source of sourceEpisodes) {
+  for (const source of episodes) {
     if (expected && source.number > expected) continue;
-    const meta = episodeMeta(source.number, ctx);
+    const meta = episodeMeta(source.number, localCtx);
     const base = {
       number: source.number,
       title: meta.title ?? source.title,
@@ -300,20 +211,11 @@ function buildEpisodeLists(anilistId, sourceEpisodes, ctx, expected) {
       recap: source.recap,
       sourceNumber: source.sourceNumber,
     };
-    if (source.hasSub) sub.push({ ...base, id: `watch/aniwaves/${anilistId}/sub/aniwaves-${source.number}`, audio: "sub" });
-    if (source.hasDub) dub.push({ ...base, id: `watch/aniwaves/${anilistId}/dub/aniwaves-${source.number}`, audio: "dub" });
+    if (source.hasSub)
+      sub.push({ ...base, id: watchId("aniwaves", anilistId, "sub", source.number), audio: "sub" });
+    if (source.hasDub)
+      dub.push({ ...base, id: watchId("aniwaves", anilistId, "dub", source.number), audio: "dub" });
   }
-  return { sub, dub };
-}
-
-export async function getEpisodes(anilistId, ctx = {}) {
-  const media = ctx.media ?? await getMedia(anilistId);
-  const localCtx = { ...ctx, media };
-  const [series, expected] = await Promise.all([
-    resolveSeries(anilistId, localCtx),
-    Promise.resolve(expectedCount(media, ctx.anizip)),
-  ]);
-  const episodes = alignEpisodes(await fetchEpisodes(series), media, expected);
   return {
     meta: {
       id: series.slug,
@@ -323,57 +225,27 @@ export async function getEpisodes(anilistId, ctx = {}) {
       numbering: "standard",
       episodeOffset: 0,
     },
-    episodes: buildEpisodeLists(anilistId, episodes, localCtx, expected),
+    episodes: { sub, dub },
   };
 }
 
-function parseServerGroups(html) {
-  const groups = [];
+function serverGroups(html) {
   const markers = [...html.matchAll(/<div\b([^>]*)>/gi)]
-    .map((match) => ({ index: match.index, attrs: match[1], type: attribute(match[1], "data-type") }))
-    .filter((item) => item.type === "sub" || item.type === "dub");
-  for (let index = 0; index < markers.length; index++) {
-    const current = markers[index];
-    const end = markers[index + 1]?.index ?? html.length;
-    const segment = html.slice(current.index, end);
-    for (const match of segment.matchAll(/<li\b([^>]*)>([\s\S]*?)<\/li>/gi)) {
-      const attrs = match[1];
-      const linkId = attribute(attrs, "data-link-id");
-      if (!linkId) continue;
-      groups.push({
-        audio: current.type,
-        linkId,
-        serverId: attribute(attrs, "data-sv-id") || null,
-        server: stripHtml(match[2]) || "AniWaves",
-      });
-    }
-  }
-  return groups;
-}
-
-async function fetchServers(series, episode) {
-  const result = await fetchAjax(
-    `/ajax/server/list?servers=${encodeURIComponent(series.siteId)}&eps=${encodeURIComponent(episode.sourceNumber)}`,
-    `${BASE}/watch/${series.slug}/ep-${episode.sourceNumber}`,
+    .map((match) => ({ index: match.index, type: attr(match[1], "data-type") }))
+    .filter((marker) => marker.type === "sub" || marker.type === "dub");
+  return markers.flatMap((marker, index) =>
+    [
+      ...html
+        .slice(marker.index, markers[index + 1]?.index ?? html.length)
+        .matchAll(/<li\b([^>]*)>([\s\S]*?)<\/li>/gi),
+    ]
+      .map((match) => ({
+        audio: marker.type,
+        linkId: attr(match[1], "data-link-id"),
+        server: stripTags(match[2]) || "AniWaves",
+      }))
+      .filter((server) => server.linkId),
   );
-  return parseServerGroups(String(result || ""));
-}
-
-async function fetchSource(linkId, referer) {
-  const result = await fetchAjax(`/ajax/sources?id=${encodeURIComponent(linkId)}&asi=0&autoPlay=0`, referer);
-  if (!result?.url) throw new Error("AniWaves source response has no embed url");
-  return result;
-}
-
-async function resolveSource(source, referer) {
-  const extractor = findVideoExtractor(source.url);
-  if (!extractor) return [];
-  try {
-    const streams = await extractor.extract(source.url, { userAgent: UA, referer });
-    return streams.map((stream) => typeof stream === "string" ? { url: stream, type: "hls" } : stream);
-  } catch {
-    return [];
-  }
 }
 
 function skipRange(value) {
@@ -383,94 +255,67 @@ function skipRange(value) {
   return Number.isFinite(start) && Number.isFinite(end) && end > start ? { start, end } : null;
 }
 
-async function handleWatch(anilistId, audio, epNum, ctx = {}) {
-  const media = ctx.media ?? await getMedia(anilistId);
-  const series = await resolveSeries(anilistId, { ...ctx, media });
-  const expected = expectedCount(media, ctx.anizip);
-  const episodes = alignEpisodes(await fetchEpisodes(series), media, expected);
-  const episode = episodes.find((item) => item.number === Number(epNum));
-  if (!episode || (audio === "sub" && !episode.hasSub) || (audio === "dub" && !episode.hasDub)) {
-    throw new Error(`AniWaves ${audio} episode ${epNum} not found`);
-  }
-  const servers = (await fetchServers(series, episode)).filter((server) => server.audio === audio);
-  if (!servers.length) throw new Error(`AniWaves has no ${audio} servers for episode ${epNum}`);
-  const referer = `${BASE}/watch/${series.slug}/ep-${episode.sourceNumber}`;
-  const settled = await Promise.all(servers.map(async (server) => {
-    try {
-      return { server, source: await fetchSource(server.linkId, referer) };
-    } catch (error) {
-      return { server, error };
-    }
-  }));
-  const resolved = await Promise.all(settled.map(async (item) => ({
-    ...item,
-    direct: item.source?.url ? await resolveSource(item.source, referer) : [],
-  })));
+export async function watch(anilistId, audio, episode) {
+  const { series, episodes } = await seriesEpisodes(anilistId, {});
+  const target = episodes.find((item) => item.number === episode);
+  if (!target || !(audio === "dub" ? target.hasDub : target.hasSub))
+    throw new Error(`AniWaves ${audio} episode ${episode} not found`);
+  const referer = `${BASE}/watch/${series.slug}/ep-${target.sourceNumber}`;
+  const servers = serverGroups(
+    String(
+      (await ajax(
+        `/ajax/server/list?servers=${encodeURIComponent(series.siteId)}&eps=${encodeURIComponent(target.sourceNumber)}`,
+        referer,
+      )) || "",
+    ),
+  ).filter((server) => server.audio === audio);
+  if (!servers.length) throw new Error(`AniWaves has no ${audio} servers for episode ${episode}`);
+  const resolved = await Promise.all(
+    servers.map(async (server) => {
+      try {
+        const source = await ajax(
+          `/ajax/sources?id=${encodeURIComponent(server.linkId)}&asi=0&autoPlay=0`,
+          referer,
+        );
+        if (!source?.url) throw new Error("AniWaves source response has no embed url");
+        const direct = await resolveEmbed(source.url, { userAgent: UA, referer }).catch(() => []);
+        return { server, source, direct };
+      } catch (error) {
+        return { server, error };
+      }
+    }),
+  );
   const streams = [];
   let intro = null;
   let outro = null;
   for (const item of resolved) {
-    if (!item.source?.url) continue;
-    const sourceReferer = (() => {
-      try { return `${new URL(item.source.url).origin}/`; } catch { return referer; }
-    })();
-    const skip = item.source.skip_data ?? {};
-    intro ??= skipRange(skip.intro);
-    outro ??= skipRange(skip.outro);
-    for (const stream of item.direct) {
+    if (!item.source) continue;
+    const sourceReferer = originOf(item.source.url, referer);
+    intro ??= skipRange(item.source.skip_data?.intro);
+    outro ??= skipRange(item.source.skip_data?.outro);
+    for (const entry of [...item.direct, { url: item.source.url, type: "embed" }])
       streams.push({
-        url: stream.url,
-        type: stream.type,
+        url: entry.url,
+        type: entry.type,
         server: item.server.server,
         referer: sourceReferer,
-        quality: stream.quality,
+        ...(entry.type === "embed" ? {} : { quality: entry.quality }),
         priority: streams.length ? 4 : 5,
         isActive: streams.length === 0,
       });
-    }
-    streams.push({
-      url: item.source.url,
-      type: "embed",
-      server: item.server.server,
-      referer: sourceReferer,
-      priority: streams.length ? 4 : 5,
-      isActive: streams.length === 0,
-    });
   }
-  if (!streams.length) {
-    const failure = settled.find((item) => item.error)?.error;
-    throw failure ?? new Error(`AniWaves sources unavailable for episode ${epNum}`);
-  }
-  return json({
+  if (!streams.length)
+    throw (
+      resolved.find((item) => item.error)?.error ??
+      new Error(`AniWaves sources unavailable for episode ${episode}`)
+    );
+  return {
     anilistId: Number(anilistId),
-    episode: Number(epNum),
-    providerEpisode: episode.number,
+    episode,
+    providerEpisode: target.number,
     audio,
     intro,
     outro,
     streams,
-  });
+  };
 }
-
-export default {
-  async fetch(request) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET,OPTIONS",
-          "Access-Control-Allow-Headers": "*",
-        },
-      });
-    }
-    const url = new URL(request.url);
-    try {
-      const match = url.pathname.match(/^\/watch\/aniwaves\/(\d+)\/(sub|dub)\/aniwaves-(\d+)\/?$/);
-      if (match) return await handleWatch(match[1], match[2], match[3]);
-      return json({ error: "Not found" }, 404);
-    } catch (error) {
-      return json({ error: error.message, "Raw-ERROR": error.rawBody ?? null, stack: error.stack }, 500);
-    }
-  },
-};

@@ -1,5 +1,0 @@
-src/providers/anime/toonstream/jwplayer.js
-dist
-node_modules
-.gemini
-tests/mocks

@@ -1,310 +1,232 @@
 import { getMedia } from "../core/anilist.js";
+import { memo, TTL } from "../core/cache.js";
+import { browserFetch, HTML_ACCEPT, notFound, parseJson, upstreamError } from "../core/http.js";
 import {
   attr,
   buildTitles,
   decodeEntities,
   episodeMeta,
   expectedCount,
-  json,
+  originOf,
   stripTags,
-} from "../core/new-provider-utils.js";
-import { get, set, isFresh, SHOW_IDENTITY_TTL } from "../core/smartcache.js";
-import { execFile } from "child_process";
-import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
+  watchId,
+} from "../core/utils.js";
 
 const BASE = "https://anidb.app";
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-const COOKIE_JAR = "/tmp/anidbapp_cookies.txt";
+const NAVIGATE = {
+  Accept: HTML_ACCEPT,
+  "Accept-Language": "en-US,en;q=0.9",
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "none",
+  "sec-fetch-user": "?1",
+  "upgrade-insecure-requests": "1",
+};
+const XHR = {
+  Accept: "application/json, text/html, */*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  "sec-fetch-dest": "empty",
+  "sec-fetch-mode": "cors",
+  "sec-fetch-site": "same-origin",
+  "X-Requested-With": "XMLHttpRequest",
+};
 
-const NAV_HEADERS = [
-  "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-  "Accept-Language: en-US,en;q=0.9",
-  "sec-ch-ua: \"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
-  "sec-ch-ua-mobile: ?0",
-  "sec-ch-ua-platform: \"Windows\"",
-  "sec-fetch-dest: document",
-  "sec-fetch-mode: navigate",
-  "sec-fetch-site: none",
-  "sec-fetch-user: ?1",
-  "upgrade-insecure-requests: 1",
-];
-
-const XHR_HEADERS = [
-  "Accept: application/json, text/html, */*;q=0.8",
-  "Accept-Language: en-US,en;q=0.9",
-  "sec-ch-ua: \"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
-  "sec-ch-ua-mobile: ?0",
-  "sec-ch-ua-platform: \"Windows\"",
-  "sec-fetch-dest: empty",
-  "sec-fetch-mode: cors",
-  "sec-fetch-site: same-origin",
-  "X-Requested-With: XMLHttpRequest",
-];
-
-async function curlFetch(url, headers, extraArgs = []) {
-  const args = [
-    "-s",
-    "--compressed",
-    "-A", UA,
-    "-c", COOKIE_JAR,
-    "-b", COOKIE_JAR,
-    "-w", "\n__STATUS:%{http_code}",
-    ...headers.flatMap(h => ["-H", h]),
-    ...extraArgs,
-    url,
-  ];
-  const { stdout } = await execFileAsync("curl", args, { maxBuffer: 8 * 1024 * 1024 });
-  const sep = stdout.lastIndexOf("\n__STATUS:");
-  const status = sep >= 0 ? Number(stdout.slice(sep + 10)) : 0;
-  const body = sep >= 0 ? stdout.slice(0, sep) : stdout;
-  if (status < 200 || status >= 300) {
-    const err = new Error(`HTTP ${status} fetching ${url}`);
-    err.rawBody = body;
-    throw err;
-  }
-  return body;
+async function get(url, headers, referer) {
+  const response = await browserFetch(url, {
+    session: "anidbapp",
+    headers: referer ? { ...headers, Referer: referer } : headers,
+  });
+  const text = await response.text();
+  if (!response.ok)
+    throw upstreamError(`AniDB.app HTTP ${response.status}: ${url}`, text, response.status);
+  return text;
 }
 
-async function fetchAnidbHtml(url, referer) {
-  const headers = referer ? [...NAV_HEADERS, `Referer: ${referer}`] : NAV_HEADERS;
-  return curlFetch(url, headers);
-}
+const page = (url, referer = `${BASE}/home`) => get(url, NAVIGATE, referer);
+const xhr = (url, referer) => get(url, XHR, referer);
+const api = async (url, referer) => parseJson(await xhr(url, referer), "AniDB.app");
 
-async function fetchXhr(url, referer) {
-  const headers = referer ? [...XHR_HEADERS, `Referer: ${referer}`] : XHR_HEADERS;
-  return curlFetch(url, headers);
-}
-
-async function fetchJson(url, referer) {
-  const text = await fetchXhr(url, referer);
-  return JSON.parse(text);
+function siteIdOf(slug) {
+  return Number(slug.match(/-(\d+)$/)?.[1]);
 }
 
 async function search(query) {
-  const html = await fetchXhr(`${BASE}/search/suggestions?q=${encodeURIComponent(query)}`, `${BASE}/home`).catch(() => "");
+  const html = await xhr(
+    `${BASE}/search/suggestions?q=${encodeURIComponent(query)}`,
+    `${BASE}/home`,
+  );
   const results = [];
-  for (const m of html.matchAll(/<a\b[^>]*data-search-item\b[^>]*>[\s\S]*?<\/a>/gi)) {
-    const tag = m[0].match(/<a\b[^>]*>/i)?.[0] ?? "";
-    const href = attr(tag, "href");
-    const path = href.startsWith("http") ? new URL(href).pathname : href;
-    const slug = path.match(/^\/anime\/([^/?#]+)/)?.[1];
+  for (const match of html.matchAll(/<a\b[^>]*data-search-item\b[^>]*>[\s\S]*?<\/a>/gi)) {
+    const href = attr(match[0].match(/<a\b[^>]*>/i)?.[0] ?? "", "href");
+    const slug = (href.startsWith("http") ? new URL(href).pathname : href).match(
+      /^\/anime\/([^/?#]+)/,
+    )?.[1];
     if (!slug) continue;
-    const title = stripTags(m[0].match(/<p\b[^>]*class=["'][^"']*text-sm[^"']*["'][^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "");
-    const meta = stripTags(m[0].match(/<p\b[^>]*class=["'][^"']*text-xs[^"']*["'][^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "");
-    const siteId = Number(slug.match(/-(\d+)$/)?.[1]);
-    results.push({ slug, title: title || slug.replace(/-/g, " "), meta, siteId });
+    const title = stripTags(
+      match[0].match(/<p\b[^>]*class=["'][^"']*text-sm[^"']*["'][^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "",
+    );
+    results.push({ slug, title: title || slug.replace(/-/g, " "), siteId: siteIdOf(slug) });
   }
   if (results.length) return results;
-
-  const browseHtml = await fetchAnidbHtml(`${BASE}/browse?q=${encodeURIComponent(query)}`, `${BASE}/home`).catch(() => "");
-  const seen = new Set();
-  for (const m of browseHtml.matchAll(/<a\b[^>]*href=["'](?:https:\/\/anidb\.app)?\/anime\/([^"']+)["'][^>]*class=["'][^"']*\banime-card\b[^"']*["'][^>]*>[\s\S]*?<\/a>/gi)) {
-    const slug = m[1];
-    if (seen.has(slug)) continue;
-    seen.add(slug);
-    const title = stripTags(m[0].match(/title=["']([^"']+)["']/i)?.[1] ?? "")
-      || stripTags(m[0].match(/alt=["']([^"']+)["']/i)?.[1] ?? "")
-      || slug.replace(/-/g, " ");
-    const siteId = Number(slug.match(/-(\d+)$/)?.[1]);
-    results.push({ slug, title, meta: "", siteId });
+  const browse = await page(`${BASE}/browse?q=${encodeURIComponent(query)}`).catch(() => "");
+  for (const match of browse.matchAll(
+    /<a\b[^>]*href=["'](?:https:\/\/anidb\.app)?\/anime\/([^"']+)["'][^>]*class=["'][^"']*\banime-card\b[^"']*["'][^>]*>[\s\S]*?<\/a>/gi,
+  )) {
+    const slug = match[1];
+    if (results.some((result) => result.slug === slug)) continue;
+    const title =
+      stripTags(match[0].match(/title=["']([^"']+)["']/i)?.[1] ?? "") ||
+      stripTags(match[0].match(/alt=["']([^"']+)["']/i)?.[1] ?? "") ||
+      slug.replace(/-/g, " ");
+    results.push({ slug, title, siteId: siteIdOf(slug) });
   }
   return results;
 }
 
-function parseExternalIds(html) {
+function externalIds(html) {
+  const id = (pattern) => Number(html.match(pattern)?.[1]) || null;
   return {
-    anilistId: Number(html.match(/https:\/\/anilist\.co\/anime\/(\d+)/i)?.[1]) || null,
-    malId: Number(html.match(/https:\/\/myanimelist\.net\/anime\/(\d+)/i)?.[1]) || null,
-    anidbId: Number(html.match(/https:\/\/anidb\.net\/anime\/(\d+)/i)?.[1]) || null,
-    kitsuId: Number(html.match(/https:\/\/kitsu\.app\/anime\/(\d+)/i)?.[1]) || null,
+    anilistId: id(/https:\/\/anilist\.co\/anime\/(\d+)/i),
+    malId: id(/https:\/\/myanimelist\.net\/anime\/(\d+)/i),
+    anidbId: id(/https:\/\/anidb\.net\/anime\/(\d+)/i),
+    kitsuId: id(/https:\/\/kitsu\.app\/anime\/(\d+)/i),
   };
 }
 
-function parsePageTitle(html) {
-  return stripTags(html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "");
-}
-
 function searchQueries(media, anizip) {
-  const titles = buildTitles(media, anizip);
-  const out = new Set();
-  for (const title of titles.slice(0, 5)) {
-    out.add(title);
+  const queries = new Set();
+  for (const title of buildTitles(media, anizip).slice(0, 5)) {
+    queries.add(title);
     const words = title.trim().split(/\s+/);
-    if (words.length > 4) out.add(words.slice(0, 4).join(" "));
+    if (words.length > 4) queries.add(words.slice(0, 4).join(" "));
   }
-  return [...out].filter((q) => q.length >= 2);
+  return [...queries].filter((query) => query.length >= 2);
 }
 
-async function resolveSeries(anilistId, ctx = {}) {
-  const cacheKey = `np:anidbapp:${anilistId}`;
-  const cached = get(cacheKey);
-  if (isFresh(cached)) return cached.data;
-
-  const media = ctx.media ?? await getMedia(anilistId);
-  const queries = searchQueries(media, ctx.anizip);
-  const candidates = new Map();
-  await Promise.all(queries.map(async (q) => {
-    for (const r of await search(q).catch(() => [])) {
-      if (!candidates.has(r.slug)) candidates.set(r.slug, r);
-    }
-  }));
-
-  for (const candidate of candidates.values()) {
-    const html = await fetchAnidbHtml(`${BASE}/anime/${candidate.slug}`, `${BASE}/home`).catch(() => "");
-    if (!html) continue;
-    const ids = parseExternalIds(html);
-    if (ids.anilistId !== Number(anilistId)) continue;
-    const data = {
-      slug: candidate.slug,
-      siteId: candidate.siteId || Number(candidate.slug.match(/-(\d+)$/)?.[1]),
-      title: parsePageTitle(html) || candidate.title,
-      matchType: "anilist",
-      matchScore: 1,
-      ...ids,
+function resolveSeries(anilistId, ctx = {}) {
+  return memo(`series:anidbapp:${anilistId}`, TTL.identity, async () => {
+    const media = ctx.media ?? (await getMedia(anilistId));
+    const candidates = new Map();
+    const failures = [];
+    await Promise.all(
+      searchQueries(media, ctx.anizip).map(async (query) => {
+        try {
+          for (const result of await search(query))
+            if (!candidates.has(result.slug)) candidates.set(result.slug, result);
+        } catch (error) {
+          failures.push(error);
+        }
+      }),
+    );
+    if (!candidates.size && failures.length) throw failures[0];
+    const pages = await Promise.all(
+      [...candidates.values()].map(async (candidate) => {
+        const html = await page(`${BASE}/anime/${candidate.slug}`).catch(() => "");
+        return html ? { candidate, html, ids: externalIds(html) } : null;
+      }),
+    );
+    const malId = Number(media?.idMal) || null;
+    const byAnilist = pages.find((item) => item?.ids.anilistId === Number(anilistId));
+    const byMal =
+      malId && pages.find((item) => item && !item.ids.anilistId && item.ids.malId === malId);
+    const match = byAnilist ?? byMal;
+    if (!match) throw new Error(`AniDB.app match not found for AniList ${anilistId}`);
+    return {
+      slug: match.candidate.slug,
+      siteId: match.candidate.siteId || siteIdOf(match.candidate.slug),
+      title:
+        stripTags(match.html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "") ||
+        match.candidate.title,
+      matchType: byAnilist ? "anilist" : "mal",
+      matchScore: byAnilist ? 1 : 0.9,
+      ...match.ids,
     };
-    set(cacheKey, data, SHOW_IDENTITY_TTL);
-    return data;
-  }
-
-  const malId = media?.idMal ?? null;
-  if (malId) {
-    for (const candidate of candidates.values()) {
-      const html = await fetchAnidbHtml(`${BASE}/anime/${candidate.slug}`, `${BASE}/home`).catch(() => "");
-      if (!html) continue;
-      const ids = parseExternalIds(html);
-      if (ids.anilistId || ids.malId !== Number(malId)) continue;
-      const data = {
-        slug: candidate.slug,
-        siteId: candidate.siteId || Number(candidate.slug.match(/-(\d+)$/)?.[1]),
-        title: parsePageTitle(html) || candidate.title,
-        matchType: "mal",
-        matchScore: 0.9,
-        ...ids,
-      };
-      set(cacheKey, data, SHOW_IDENTITY_TTL);
-      return data;
-    }
-  }
-
-  throw new Error(`AniDB.app match not found for AniList ${anilistId}`);
+  });
 }
 
-async function fetchProviderEpisodes(siteId) {
-  const data = await fetchJson(`${BASE}/api/frontend/anime/${siteId}/episodes`, `${BASE}/anime/${siteId}`);
+async function providerEpisodes(siteId) {
+  const data = await api(
+    `${BASE}/api/frontend/anime/${siteId}/episodes`,
+    `${BASE}/anime/${siteId}`,
+  );
   return Array.isArray(data.episodes) ? data.episodes : [];
 }
 
-function inferOffset(providerEpisodes, expected) {
-  const nums = providerEpisodes.map((e) => Number(e.number)).filter((n) => Number.isFinite(n) && n > 0);
-  if (!nums.length || !expected) return 0;
-  const min = Math.min(...nums);
-  const max = Math.max(...nums);
+function inferOffset(episodes, expected) {
+  const numbers = episodes
+    .map((episode) => Number(episode.number))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (!numbers.length || !expected) return 0;
+  const min = Math.min(...numbers);
+  const max = Math.max(...numbers);
   if (min > expected) return min - 1;
   if (min > 1 && max - min + 1 >= expected) return min - 1;
   return 0;
 }
 
-async function fetchLanguages(episodeId, seriesSlug) {
-  const data = await fetchJson(`${BASE}/api/frontend/episode/${episodeId}/languages`, `${BASE}/anime/${seriesSlug}`).catch(() => null);
+async function languages(episodeId, slug) {
+  const data = await api(
+    `${BASE}/api/frontend/episode/${episodeId}/languages`,
+    `${BASE}/anime/${slug}`,
+  ).catch(() => null);
   return Array.isArray(data?.languages) ? data.languages : [];
 }
 
-function hasLanguage(languages, audio) {
-  return Boolean(languageForAudio(languages, audio)?.embed_url);
+function languageFor(list, audio) {
+  const preferred = audio === "sub" ? ["jpn", "ja", "japanese"] : ["eng", "en", "english"];
+  return (
+    list.find((item) => preferred.includes(String(item.code ?? "").toLowerCase())) ??
+    list.find((item) => preferred.includes(String(item.name ?? "").toLowerCase())) ??
+    null
+  );
 }
 
-function buildEpisodeLists(anilistId, providerEpisodes, ctx, expected, offset, availability) {
+function extractHls(html) {
+  for (const pattern of [
+    /file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
+    /["'](https?:\/\/[^"']+\/master\.m3u8[^"']*)["']/i,
+    /["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
+  ]) {
+    const match = html.match(pattern);
+    if (match?.[1]) return decodeEntities(match[1]);
+  }
+  return null;
+}
+
+export async function getEpisodes(anilistId, ctx = {}) {
+  const media = ctx.media ?? (await getMedia(anilistId));
+  const localCtx = { ...ctx, media };
+  const series = await resolveSeries(anilistId, localCtx);
+  const episodes = await providerEpisodes(series.siteId);
+  const expected = expectedCount(media, ctx.anizip);
+  const offset = inferOffset(episodes, expected);
+  const sample = episodes[0]?.id ? await languages(episodes[0].id, series.slug) : [];
+  const hasSub = Boolean(languageFor(sample, "sub")?.embed_url) || !sample.length;
+  const hasDub = Boolean(languageFor(sample, "dub")?.embed_url);
   const sub = [];
   const dub = [];
-  for (const src of providerEpisodes) {
-    const sourceNumber = Number(src.number);
+  for (const source of episodes) {
+    const sourceNumber = Number(source.number);
     const number = sourceNumber - offset;
-    if (!Number.isFinite(number) || number < 1) continue;
-    if (expected && number > expected) continue;
-    const meta = episodeMeta(number, ctx);
+    if (!Number.isFinite(number) || number < 1 || (expected && number > expected)) continue;
+    const meta = episodeMeta(number, localCtx);
     const base = {
       number,
       title: meta.title ?? `Episode ${number}`,
       duration: meta.duration,
-      filler: src.filler ?? meta.filler,
+      filler: source.filler ?? meta.filler,
       uncensored: meta.uncensored,
       description: meta.description,
       image: meta.image,
       airDate: meta.airDate,
       sourceNumber,
-      sourceId: src.id,
+      sourceId: source.id,
     };
-    if (availability.hasSub) sub.push({ ...base, id: `watch/anidbapp/${anilistId}/sub/anidbapp-${number}`, audio: "sub" });
-    if (availability.hasDub) dub.push({ ...base, id: `watch/anidbapp/${anilistId}/dub/anidbapp-${number}`, audio: "dub" });
+    if (hasSub)
+      sub.push({ ...base, id: watchId("anidbapp", anilistId, "sub", number), audio: "sub" });
+    if (hasDub)
+      dub.push({ ...base, id: watchId("anidbapp", anilistId, "dub", number), audio: "dub" });
   }
-  return { sub, dub };
-}
-
-function languageForAudio(languages, audio) {
-  const preferred = audio === "sub" ? ["jpn", "ja", "japanese"] : ["eng", "en", "english"];
-  return languages.find((l) => preferred.includes(String(l.code ?? "").toLowerCase()))
-    ?? languages.find((l) => preferred.includes(String(l.name ?? "").toLowerCase()))
-    ?? null;
-}
-
-function extractHls(html) {
-  const patterns = [
-    /file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
-    /sources\s*:\s*\[\s*\{[^}]*file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
-    /["'](https?:\/\/[^"']+\/master\.m3u8[^"']*)["']/i,
-    /["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
-  ];
-  for (const pattern of patterns) {
-    const m = html.match(pattern);
-    if (m?.[1]) return decodeEntities(m[1]);
-  }
-  return null;
-}
-
-async function streamsForEmbed(embedUrl, audio, language) {
-  const html = await fetchAnidbHtml(embedUrl, { Referer: `${BASE}/` }).catch(() => "");
-  const hls = html ? extractHls(html) : null;
-  const streams = [];
-  if (hls) {
-    streams.push({
-      url: hls,
-      type: "hls",
-      audio,
-      language: language.code,
-      server: "AniDB.app",
-      embed: embedUrl,
-      referer: `${new URL(embedUrl).origin}/`,
-      priority: 5,
-      isActive: true,
-    });
-  }
-  streams.push({
-    url: embedUrl,
-    type: "embed",
-    audio,
-    language: language.code,
-    server: "AniDB.app-embed",
-    referer: `${BASE}/`,
-    priority: 4,
-    isActive: !hls,
-  });
-  return streams;
-}
-
-export async function getEpisodes(anilistId, ctx = {}) {
-  const media = ctx.media ?? await getMedia(anilistId);
-  const localCtx = { ...ctx, media };
-  const series = await resolveSeries(anilistId, localCtx);
-  const episodes = await fetchProviderEpisodes(series.siteId);
-  const expected = expectedCount(media, ctx.anizip);
-  const offset = inferOffset(episodes, expected);
-  const sampleLanguages = episodes[0]?.id ? await fetchLanguages(episodes[0].id, series.slug) : [];
-  const availability = {
-    hasSub: hasLanguage(sampleLanguages, "sub") || !sampleLanguages.length,
-    hasDub: hasLanguage(sampleLanguages, "dub"),
-  };
   return {
     meta: {
       id: series.slug,
@@ -318,41 +240,47 @@ export async function getEpisodes(anilistId, ctx = {}) {
       numbering: offset ? "offset" : "local",
       episodeOffset: offset,
     },
-    episodes: buildEpisodeLists(anilistId, episodes, localCtx, expected, offset, availability),
+    episodes: { sub, dub },
   };
 }
 
-async function handleWatch(anilistId, audio, epNum, ctx = {}) {
-  const series = await resolveSeries(anilistId, ctx);
-  const episodes = await fetchProviderEpisodes(series.siteId);
-  const media = ctx.media ?? await getMedia(anilistId).catch(() => null);
-  const expected = expectedCount(media, ctx.anizip);
-  const offset = inferOffset(episodes, expected);
-  const providerEp = Number(epNum) + offset;
-  const episode = episodes.find((e) => Number(e.number) === providerEp);
-  if (!episode) return json({ error: `AniDB.app episode ${epNum} not found` }, 404);
-  const languages = await fetchLanguages(episode.id, series.slug);
-  const language = languageForAudio(languages, audio);
-  if (!language?.embed_url) {
-    return json({ anilistId: Number(anilistId), episode: Number(epNum), providerEpisode: providerEp, audio, streams: [] });
-  }
-  const embedUrl = decodeEntities(language.embed_url);
-  const streams = await streamsForEmbed(embedUrl, audio, language);
-  return json({ anilistId: Number(anilistId), episode: Number(epNum), providerEpisode: providerEp, audio, language: language.code, streams });
+export async function watch(anilistId, audio, episode) {
+  const [series, media] = await Promise.all([
+    resolveSeries(anilistId),
+    getMedia(anilistId).catch(() => null),
+  ]);
+  const episodes = await providerEpisodes(series.siteId);
+  const providerEpisode = episode + inferOffset(episodes, expectedCount(media));
+  const target = episodes.find((item) => Number(item.number) === providerEpisode);
+  if (!target) throw notFound(`AniDB.app episode ${episode} not found`);
+  const language = languageFor(await languages(target.id, series.slug), audio);
+  const base = { anilistId: Number(anilistId), episode, providerEpisode, audio };
+  if (!language?.embed_url) return { ...base, streams: [] };
+  const embed = decodeEntities(language.embed_url);
+  const hls = extractHls(await page(embed, `${BASE}/`).catch(() => ""));
+  const streams = [
+    {
+      url: embed,
+      type: "embed",
+      audio,
+      language: language.code,
+      server: "AniDB.app-embed",
+      referer: `${BASE}/`,
+      priority: 4,
+      isActive: !hls,
+    },
+  ];
+  if (hls)
+    streams.unshift({
+      url: hls,
+      type: "hls",
+      audio,
+      language: language.code,
+      server: "AniDB.app",
+      embed,
+      referer: originOf(embed),
+      priority: 5,
+      isActive: true,
+    });
+  return { ...base, language: language.code, streams };
 }
-
-export default {
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,OPTIONS", "Access-Control-Allow-Headers": "*" } });
-    }
-    try {
-      const m = url.pathname.match(/^\/watch\/anidbapp\/(\d+)\/(sub|dub)\/anidbapp-(\d+)\/?$/);
-      if (m) return await handleWatch(m[1], m[2], m[3]);
-      return json({ error: "Not found" }, 404);
-    } catch (err) {
-      return json({ error: err.message, "Raw-ERROR": err.rawBody ?? null, stack: err.stack }, 500);
-    }
-  },
-};

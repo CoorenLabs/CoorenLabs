@@ -4,7 +4,6 @@ import { anilistMetaRoutes } from "./anilist/route";
 export const metaRoutes = new Elysia({ prefix: "/meta" })
   .use(anilistMetaRoutes)
 
-  // ── Overview ──────────────────────────────────────────────────────────────────
   .get(
     "/",
     () => ({

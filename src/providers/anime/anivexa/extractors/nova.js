@@ -1,25 +1,29 @@
 import crypto from "node:crypto";
+import { fetchText, UA } from "../core/http.js";
 
-const DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
-const KEY = Buffer.from("6b69656d7469656e6d75613931316361", "hex");
-const IV = Buffer.from("313233343536373839306f6975797472", "hex");
+const KEY = Buffer.from("kiemtienmua911ca");
+const IV = Buffer.from("1234567890oiuytr");
 
 export function canExtractNova(url) {
-  return /upn\.one/i.test(String(url));
+  return /(?:upn\.one|uns\.bio)\/?#/i.test(String(url));
 }
 
-export async function extractNova(embedUrl, { fetchImpl = fetch, userAgent = DEFAULT_USER_AGENT } = {}) {
-  const id = String(embedUrl).match(/upn\.one\/#([A-Za-z0-9]+)/i)?.[1];
-  if (!id) throw new Error(`Cannot extract Nova id from ${embedUrl}`);
-  const response = await fetchImpl(`https://nova.upn.one/api/v1/video?id=${id}&w=1920&h=1080&r=`, {
-    headers: { "User-Agent": userAgent, "Referer": "https://nova.upn.one/" }
-  });
-  if (!response.ok) throw new Error(`Nova fetch HTTP ${response.status}`);
-  const hex = (await response.text()).trim();
+export async function extractNova(embedUrl, { userAgent = UA } = {}) {
+  const url = new URL(String(embedUrl));
+  const id = url.hash.slice(1).split("&")[0];
+  if (!/^[A-Za-z0-9]+$/.test(id)) throw new Error(`Cannot extract Nova id from ${embedUrl}`);
+  const hex = (
+    await fetchText(`${url.origin}/api/v1/video?id=${encodeURIComponent(id)}&w=1920&h=1080&r=`, {
+      label: "Nova",
+      headers: { "User-Agent": userAgent, Referer: `${url.origin}/`, Origin: url.origin },
+    })
+  ).trim();
+  if (!/^[0-9a-f]+$/i.test(hex)) throw new Error("Nova response is not encrypted hex");
   const decipher = crypto.createDecipheriv("aes-128-cbc", KEY, IV);
-  const decrypted = Buffer.concat([decipher.update(Buffer.from(hex, "hex")), decipher.final()]);
-  const data = JSON.parse(decrypted.toString("utf8"));
-  const url = data.cf ?? data.source;
-  if (!url) throw new Error("Nova response missing m3u8 url");
-  return [url];
+  const data = JSON.parse(
+    Buffer.concat([decipher.update(Buffer.from(hex, "hex")), decipher.final()]).toString("utf8"),
+  );
+  const source = data.cf ?? data.source;
+  if (!source) throw new Error("Nova response missing m3u8 url");
+  return [{ url: source, type: "hls", referer: `${url.origin}/` }];
 }

@@ -1,105 +1,182 @@
+import { Cache } from "../../../core/cache";
+import { Logger } from "../../../core/logger";
+import { type ProxyHeaders, proxyUrl } from "../../../core/proxy";
 import { remapManager } from "../../../core/remapManager";
 import { extractAniZipImages, fetchWithRetry } from "../../meta/anilist/lib/helpers";
-import { Logger } from "../../../core/logger";
-import { miruro as miruroOrigin } from "../../origins";
-import {
-  MEDIA_FULL_FIELDS,
-  MEDIA_LIST_FIELDS,
-  decodePipeResponse,
-  deepTranslate,
-  encodePipeRequest,
-  injectSourceSlugs,
-  applyRemapsToMedia,
-} from "./utils";
+import { miruro as MIRURO_URL } from "../../origins";
+import { MEDIA_FULL_FIELDS, MEDIA_LIST_FIELDS, applyRemapsToMedia, decodeCatalog } from "./utils";
 
 const ANILIST_URL = "https://graphql.anilist.co";
+const CATALOG_URL = `${MIRURO_URL}/api/v1`;
+const CATALOG_ATTEMPTS = 3;
+const LOOKUP_TTL = 7 * 24 * 3600;
+
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+  Referer: `${MIRURO_URL}/`,
+};
+
+const SORTS = new Set([
+  "SCORE_DESC",
+  "POPULARITY_DESC",
+  "TRENDING_DESC",
+  "START_DATE_DESC",
+  "FAVOURITES_DESC",
+  "UPDATED_AT_DESC",
+]);
+
+type CatalogEntry = { id: string; format: string | null };
+
+type CatalogEpisode = {
+  episode_number: number;
+  title: string | null;
+  synopsis: string | null;
+  thumbnail_url: string | null;
+  aired_on: string | null;
+  duration_seconds: number | null;
+  canon_type: string | null;
+  skip_times?: { kind: string; start_seconds: number; end_seconds: number }[];
+};
+
+type PlaybackServer = {
+  server: string;
+  headers?: ProxyHeaders;
+  streams: { url: string; format: string }[];
+};
+
+type PlaybackProvider = {
+  provider: string;
+  subtitles?: { file: string }[];
+  servers: PlaybackServer[];
+};
+
+type Playback = {
+  tracks: { track: string; providers: PlaybackProvider[] }[];
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const aniZip = (anilistId: string | number) =>
+  fetchWithRetry(`https://api.ani.zip/mappings?anilist_id=${anilistId}`)
+    .then((res) => res.json())
+    .catch(() => null);
+
+function withArtwork(media: any, mappings: unknown) {
+  const { banner, logo } = extractAniZipImages(mappings, remapManager.getRemap(media.id));
+  media.bannerImage = banner || media.bannerImage;
+  media.logo = logo || media.logo;
+  return media;
+}
+
+function paged(pageInfo: any, page: number, perPage: number) {
+  return {
+    page: pageInfo?.currentPage || page,
+    perPage: pageInfo?.perPage || perPage,
+    total: pageInfo?.total || 0,
+    hasNextPage: pageInfo?.hasNextPage || false,
+  };
+}
+
+function playbackHeaders(headers: ProxyHeaders = {}): ProxyHeaders {
+  if (headers.Origin || !headers.Referer || !URL.canParse(headers.Referer)) return headers;
+  return { ...headers, Origin: new URL(headers.Referer).origin };
+}
+
+function withProxies(provider: PlaybackProvider) {
+  const subtitleHeaders = playbackHeaders(provider.servers[0]?.headers);
+  return {
+    ...provider,
+    subtitles: provider.subtitles?.map((subtitle) => ({
+      ...subtitle,
+      proxiedUrl: proxyUrl(subtitle.file, subtitleHeaders, "file"),
+    })),
+    servers: provider.servers.map((server) => {
+      const headers = playbackHeaders(server.headers);
+      return {
+        ...server,
+        streams: server.streams.map((stream) => ({
+          ...stream,
+          proxiedUrl: proxyUrl(stream.url, headers, stream.format === "hls" ? "hls" : "mp4"),
+        })),
+      };
+    }),
+  };
+}
+
+async function catalog<T>(path: string): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(`${CATALOG_URL}/${path}`, { headers: HEADERS });
+      if (!res.ok) {
+        throw Object.assign(new Error(`Miruro catalog responded ${res.status} for ${path}`), {
+          status: res.status,
+        });
+      }
+      return decodeCatalog(
+        res.headers.get("content-type"),
+        new Uint8Array(await res.arrayBuffer()),
+      );
+    } catch (err) {
+      const status = (err as { status?: number }).status ?? 0;
+      if (attempt >= CATALOG_ATTEMPTS || (status >= 400 && status < 500)) throw err;
+      await sleep(250 * attempt);
+    }
+  }
+}
 
 export class Miruro {
-  private static pipeUrl = `${miruroOrigin}/api/secure/pipe`;
-
-  private static headers(): Record<string, string> {
-    return {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-      Referer: `${miruroOrigin}/`,
-    };
-  }
-
-  private static async anilistQuery(query: string, variables?: Record<string, any>): Promise<any> {
-    const body: any = { query };
-    if (variables) body.variables = variables;
-
+  private static async anilistQuery(query: string, variables?: Record<string, unknown>) {
     const res = await fetch(ANILIST_URL, {
       method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
     });
-
-    if (!res.ok) {
-      throw new Error(`AniList query failed: HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`AniList query failed: HTTP ${res.status}`);
     const json = await res.json();
     return json.data || {};
   }
 
-  private static async fetchRawEpisodes(anilistId: string | number): Promise<any> {
-    const payload = {
-      path: "episodes",
-      method: "GET",
-      query: { anilistId: Number(anilistId) },
-      body: null,
-      version: "0.1.0",
-    };
-    const encodedReq = encodePipeRequest(payload);
-    
-    const res = await fetch(`${this.pipeUrl}?e=${encodedReq}`, {
-      headers: this.headers(),
+  private static async lookup(anilistId: string | number): Promise<CatalogEntry | null> {
+    const id = Number(anilistId);
+    if (!Number.isSafeInteger(id) || id <= 0) return null;
+
+    const { data } = await Cache.remember(`miruro:catalog:${id}`, LOOKUP_TTL, async () => {
+      const { data: matches } = await catalog<{
+        data: (CatalogEntry & { external_ids?: { anilist?: string[] } })[];
+      }>(`anime?anilist_id_in=${id}&limit=100`);
+      const match = matches.find((item) => item.external_ids?.anilist?.includes(String(id)));
+      return match ? { id: match.id, format: match.format } : null;
     });
-    
-    if (!res.ok) {
-      throw new Error(`Pipe request failed: HTTP ${res.status}`);
-    }
-    const text = await res.text();
-    const data = decodePipeResponse(text.trim());
-    deepTranslate(data);
     return data;
   }
 
-  // ─── Search & Discovery ──────────────────────────────────────────────────────
-
   static async search(query: string, page = 1, perPage = 20) {
     try {
-      const gql = `
-        query ($search: String, $page: Int, $perPage: Int) {
+      const data = await this.anilistQuery(
+        `query ($search: String, $page: Int, $perPage: Int) {
           Page(page: $page, perPage: $perPage) {
             pageInfo { total currentPage lastPage hasNextPage perPage }
             media(search: $search, type: ANIME, sort: SEARCH_MATCH, isAdult: false) {
               ${MEDIA_LIST_FIELDS}
             }
           }
-        }
-      `;
-      const data = await this.anilistQuery(gql, { search: query, page, perPage });
-      const pageInfo = data.Page?.pageInfo || {};
+        }`,
+        { search: query, page, perPage },
+      );
       return {
-        page: pageInfo.currentPage || page,
-        perPage: pageInfo.perPage || perPage,
-        total: pageInfo.total || 0,
-        hasNextPage: pageInfo.hasNextPage || false,
+        ...paged(data.Page?.pageInfo, page, perPage),
         results: (data.Page?.media || []).map(applyRemapsToMedia),
       };
     } catch (err) {
-      Logger.error(`Miruro search error: ${String(err)}`);
+      Logger.error(`[Miruro] search failed: ${String(err)}`);
       return null;
     }
   }
 
   static async suggestions(query: string) {
     try {
-      const gql = `
-        query ($search: String) {
+      const data = await this.anilistQuery(
+        `query ($search: String) {
           Page(page: 1, perPage: 8) {
             media(search: $search, type: ANIME, sort: SEARCH_MATCH, isAdult: false) {
               id
@@ -111,196 +188,144 @@ export class Miruro {
               episodes
             }
           }
-        }
-      `;
-      const data = await this.anilistQuery(gql, { search: query });
-      const results = (data.Page?.media || []).map(applyRemapsToMedia).map((item: any) => ({
-        id: item.id,
-        title: item.title?.english || item.title?.romaji,
-        title_romaji: item.title?.romaji,
-        poster: item.coverImage?.large,
-        format: item.format,
-        status: item.status,
-        year: item.startDate?.year,
-        episodes: item.episodes,
-      }));
-      return { suggestions: results };
+        }`,
+        { search: query },
+      );
+      return {
+        suggestions: (data.Page?.media || []).map(applyRemapsToMedia).map((item: any) => ({
+          id: item.id,
+          title: item.title?.english || item.title?.romaji,
+          title_romaji: item.title?.romaji,
+          poster: item.coverImage?.large,
+          format: item.format,
+          status: item.status,
+          year: item.startDate?.year,
+          episodes: item.episodes,
+        })),
+      };
     } catch (err) {
-      Logger.error(`Miruro suggestions error: ${String(err)}`);
+      Logger.error(`[Miruro] suggestions failed: ${String(err)}`);
       return null;
     }
   }
 
-  static async filter(params: any) {
+  static async filter(params: Record<string, string | undefined>) {
     try {
-      const sortMap: Record<string, string> = {
-        SCORE_DESC: "SCORE_DESC",
-        POPULARITY_DESC: "POPULARITY_DESC",
-        TRENDING_DESC: "TRENDING_DESC",
-        START_DATE_DESC: "START_DATE_DESC",
-        FAVOURITES_DESC: "FAVOURITES_DESC",
-        UPDATED_AT_DESC: "UPDATED_AT_DESC",
-      };
-
-      const sort = sortMap[params.sort] || "POPULARITY_DESC";
+      const sort = SORTS.has(params.sort ?? "") ? params.sort : "POPULARITY_DESC";
       const args = ["type: ANIME", `sort: [${sort}]`, "isAdult: false"];
-      const variables: any = {
+      const types = ["$page: Int", "$perPage: Int"];
+      const variables: Record<string, unknown> = {
         page: Number(params.page) || 1,
-        perPage: Number(params.per_page) || 20,
+        perPage: Number(params.perPage ?? params.per_page) || 20,
+      };
+      const add = (name: string, type: string, value: unknown) => {
+        args.push(`${name}: $${name}`);
+        types.push(`$${name}: ${type}`);
+        variables[name] = value;
       };
 
-      const varTypes = ["$page: Int", "$perPage: Int"];
+      if (params.genre) add("genre", "String", params.genre);
+      if (params.tag) add("tag", "String", params.tag);
+      if (params.year) add("seasonYear", "Int", Number(params.year));
+      if (params.season) add("season", "MediaSeason", params.season.toUpperCase());
+      if (params.format) add("format", "MediaFormat", params.format.toUpperCase());
+      if (params.status) add("status", "MediaStatus", params.status.toUpperCase());
 
-      if (params.genre) {
-        args.push("genre: $genre");
-        variables.genre = params.genre;
-        varTypes.push("$genre: String");
-      }
-      if (params.tag) {
-        args.push("tag: $tag");
-        variables.tag = params.tag;
-        varTypes.push("$tag: String");
-      }
-      if (params.year) {
-        args.push("seasonYear: $seasonYear");
-        variables.seasonYear = Number(params.year);
-        varTypes.push("$seasonYear: Int");
-      }
-      if (params.season) {
-        args.push("season: $season");
-        variables.season = String(params.season).toUpperCase();
-        varTypes.push("$season: MediaSeason");
-      }
-      if (params.format) {
-        args.push("format: $format");
-        variables.format = String(params.format).toUpperCase();
-        varTypes.push("$format: MediaFormat");
-      }
-      if (params.status) {
-        args.push("status: $status");
-        variables.status = String(params.status).toUpperCase();
-        varTypes.push("$status: MediaStatus");
-      }
-
-      const gql = `
-        query (${varTypes.join(", ")}) {
+      const data = await this.anilistQuery(
+        `query (${types.join(", ")}) {
           Page(page: $page, perPage: $perPage) {
             pageInfo { total currentPage lastPage hasNextPage perPage }
             media(${args.join(", ")}) {
               ${MEDIA_LIST_FIELDS}
             }
           }
-        }
-      `;
-      const data = await this.anilistQuery(gql, variables);
-      const pageInfo = data.Page?.pageInfo || {};
+        }`,
+        variables,
+      );
       return {
-        page: pageInfo.currentPage || variables.page,
-        perPage: pageInfo.perPage || variables.perPage,
-        total: pageInfo.total || 0,
-        hasNextPage: pageInfo.hasNextPage || false,
+        ...paged(data.Page?.pageInfo, variables.page as number, variables.perPage as number),
         results: (data.Page?.media || []).map(applyRemapsToMedia),
       };
     } catch (err) {
-      Logger.error(`Miruro filter error: ${String(err)}`);
+      Logger.error(`[Miruro] filter failed: ${String(err)}`);
       return null;
     }
   }
 
-  // ─── Collections ─────────────────────────────────────────────────────────────
-
-  private static async fetchCollection(sortType: string, status?: string, page = 1, perPage = 20, allowAll = false) {
+  private static async collection(
+    sort: string,
+    status: string | null,
+    page: number,
+    perPage: number,
+    allowAll: boolean,
+  ) {
     try {
-      const statusFilter = status ? `, status: ${status}` : "";
-      const countryFilter = allowAll ? "" : `, countryOfOrigin: "JP"`;
-      const gql = `
-        query ($page: Int, $perPage: Int) {
+      const filters = `${status ? `, status: ${status}` : ""}${allowAll ? "" : ', countryOfOrigin: "JP"'}`;
+      const data = await this.anilistQuery(
+        `query ($page: Int, $perPage: Int) {
           Page(page: $page, perPage: $perPage) {
             pageInfo { total currentPage lastPage hasNextPage perPage }
-            media(type: ANIME, sort: [${sortType}]${statusFilter}${countryFilter}, isAdult: false) {
+            media(type: ANIME, sort: [${sort}]${filters}, isAdult: false) {
               ${MEDIA_LIST_FIELDS}
             }
           }
-        }
-      `;
-      const data = await this.anilistQuery(gql, { page, perPage });
-      const pageInfo = data.Page?.pageInfo || {};
+        }`,
+        { page, perPage },
+      );
       return {
-        page: pageInfo.currentPage || page,
-        perPage: pageInfo.perPage || perPage,
-        total: pageInfo.total || 0,
-        hasNextPage: pageInfo.hasNextPage || false,
+        ...paged(data.Page?.pageInfo, page, perPage),
         results: (data.Page?.media || []).map(applyRemapsToMedia),
       };
     } catch (err) {
-      Logger.error(`Miruro collection error: ${String(err)}`);
+      Logger.error(`[Miruro] ${sort} collection failed: ${String(err)}`);
       return null;
     }
   }
 
-  static async trending(page = 1, perPage = 20, allowAll = false) {
-    return this.fetchCollection("TRENDING_DESC", undefined, page, perPage, allowAll);
+  static trending(page = 1, perPage = 20, allowAll = false) {
+    return this.collection("TRENDING_DESC", null, page, perPage, allowAll);
   }
 
-  static async popular(page = 1, perPage = 20, allowAll = false) {
-    return this.fetchCollection("POPULARITY_DESC", undefined, page, perPage, allowAll);
+  static popular(page = 1, perPage = 20, allowAll = false) {
+    return this.collection("POPULARITY_DESC", null, page, perPage, allowAll);
   }
 
-  static async upcoming(page = 1, perPage = 20, allowAll = false) {
-    return this.fetchCollection("POPULARITY_DESC", "NOT_YET_RELEASED", page, perPage, allowAll);
+  static upcoming(page = 1, perPage = 20, allowAll = false) {
+    return this.collection("POPULARITY_DESC", "NOT_YET_RELEASED", page, perPage, allowAll);
   }
 
-  static async recent(page = 1, perPage = 20, allowAll = false) {
-    return this.fetchCollection("START_DATE_DESC", "RELEASING", page, perPage, allowAll);
+  static recent(page = 1, perPage = 20, allowAll = false) {
+    return this.collection("START_DATE_DESC", "RELEASING", page, perPage, allowAll);
   }
 
   static async spotlight(allowAll = false) {
     try {
-      const countryFilter = allowAll ? "" : `, countryOfOrigin: "JP"`;
-      const gql = `
-        query {
+      const data = await this.anilistQuery(
+        `query {
           Page(page: 1, perPage: 10) {
-            media(sort: [TRENDING_DESC, POPULARITY_DESC], type: ANIME${countryFilter}, isAdult: false) {
+            media(sort: [TRENDING_DESC, POPULARITY_DESC], type: ANIME${allowAll ? "" : ', countryOfOrigin: "JP"'}, isAdult: false) {
               ${MEDIA_LIST_FIELDS}
               description(asHtml: false)
             }
           }
-        }
-      `;
-      const data = await this.anilistQuery(gql);
-      const mediaList = data.Page?.media || [];
-      
-      const results = await Promise.all(
-        mediaList.map(async (media: any) => {
-          media = applyRemapsToMedia(media);
-          try {
-            const aniZipResponse = await fetchWithRetry(`https://api.ani.zip/mappings?anilist_id=${media.id}`)
-              .then((r) => r.json())
-              .catch(() => null);
-
-            const remap = remapManager.getRemap(media.id);
-            const { banner, logo } = extractAniZipImages(aniZipResponse, remap);
-
-            media.bannerImage = banner || media.bannerImage;
-            media.logo = logo || media.logo;
-          } catch (e) {
-            // ignore
-          }
-          return media;
-        })
+        }`,
       );
-
+      const results = await Promise.all(
+        (data.Page?.media || []).map(async (media: any) =>
+          withArtwork(applyRemapsToMedia(media), await aniZip(media.id)),
+        ),
+      );
       return { results };
     } catch (err) {
-      Logger.error(`Miruro spotlight error: ${String(err)}`);
+      Logger.error(`[Miruro] spotlight failed: ${String(err)}`);
       return null;
     }
   }
 
   static async schedule(page = 1, perPage = 20) {
     try {
-      const gql = `
-        query ($page: Int, $perPage: Int) {
+      const data = await this.anilistQuery(
+        `query ($page: Int, $perPage: Int) {
           Page(page: $page, perPage: $perPage) {
             pageInfo { total currentPage lastPage hasNextPage perPage }
             airingSchedules(notYetAired: true, sort: TIME) {
@@ -312,68 +337,48 @@ export class Miruro {
               }
             }
           }
-        }
-      `;
-      const data = await this.anilistQuery(gql, { page, perPage });
-      const pageInfo = data.Page?.pageInfo || {};
-      const results = (data.Page?.airingSchedules || []).map((item: any) => {
-        const entry = item.media ? applyRemapsToMedia(item.media) : {};
-        entry.next_episode = item.episode;
-        entry.airingAt = item.airingAt;
-        entry.timeUntilAiring = item.timeUntilAiring;
-        return entry;
-      });
+        }`,
+        { page, perPage },
+      );
       return {
-        page: pageInfo.currentPage || page,
-        perPage: pageInfo.perPage || perPage,
-        total: pageInfo.total || 0,
-        hasNextPage: pageInfo.hasNextPage || false,
-        results,
+        ...paged(data.Page?.pageInfo, page, perPage),
+        results: (data.Page?.airingSchedules || []).map((item: any) => ({
+          ...(item.media ? applyRemapsToMedia(item.media) : {}),
+          next_episode: item.episode,
+          airingAt: item.airingAt,
+          timeUntilAiring: item.timeUntilAiring,
+        })),
       };
     } catch (err) {
-      Logger.error(`Miruro schedule error: ${String(err)}`);
+      Logger.error(`[Miruro] schedule failed: ${String(err)}`);
       return null;
     }
   }
 
-  // ─── Anime Details ───────────────────────────────────────────────────────────
-
   static async info(anilistId: string | number) {
     try {
-      const gql = `
-        query ($id: Int) {
-          Media(id: $id, type: ANIME) {
-            ${MEDIA_FULL_FIELDS}
-          }
-        }
-      `;
-      const [data, aniZipResponse] = await Promise.all([
-        this.anilistQuery(gql, { id: Number(anilistId) }),
-        fetchWithRetry(`https://api.ani.zip/mappings?anilist_id=${anilistId}`)
-          .then((r) => r.json())
-          .catch(() => null)
+      const [data, mappings] = await Promise.all([
+        this.anilistQuery(
+          `query ($id: Int) {
+            Media(id: $id, type: ANIME) {
+              ${MEDIA_FULL_FIELDS}
+            }
+          }`,
+          { id: Number(anilistId) },
+        ),
+        aniZip(anilistId),
       ]);
-      
-      if (!data.Media) return null;
-      const media = applyRemapsToMedia(data.Media);
-
-      const remap = remapManager.getRemap(anilistId);
-      const { banner, logo } = extractAniZipImages(aniZipResponse, remap);
-
-      media.bannerImage = banner || media.bannerImage;
-      media.logo = logo || media.logo;
-
-      return media;
+      return data.Media ? withArtwork(applyRemapsToMedia(data.Media), mappings) : null;
     } catch (err) {
-      Logger.error(`Miruro info error: ${String(err)}`);
+      Logger.error(`[Miruro] info failed for ${anilistId}: ${String(err)}`);
       return null;
     }
   }
 
   static async characters(anilistId: string | number, page = 1, perPage = 25) {
     try {
-      const gql = `
-        query ($id: Int, $page: Int, $perPage: Int) {
+      const data = await this.anilistQuery(
+        `query ($id: Int, $page: Int, $perPage: Int) {
           Media(id: $id, type: ANIME) {
             id
             title { romaji english }
@@ -401,28 +406,24 @@ export class Miruro {
               }
             }
           }
-        }
-      `;
-      const data = await this.anilistQuery(gql, { id: Number(anilistId), page, perPage });
-      const chars = data.Media?.characters || {};
-      const pageInfo = chars.pageInfo || {};
+        }`,
+        { id: Number(anilistId), page, perPage },
+      );
+      const characters = data.Media?.characters;
       return {
-        page: pageInfo.currentPage || page,
-        perPage: pageInfo.perPage || perPage,
-        total: pageInfo.total || 0,
-        hasNextPage: pageInfo.hasNextPage || false,
-        characters: chars.edges || [],
+        ...paged(characters?.pageInfo, page, perPage),
+        characters: characters?.edges || [],
       };
     } catch (err) {
-      Logger.error(`Miruro characters error: ${String(err)}`);
+      Logger.error(`[Miruro] characters failed for ${anilistId}: ${String(err)}`);
       return null;
     }
   }
 
   static async relations(anilistId: string | number) {
     try {
-      const gql = `
-        query ($id: Int) {
+      const data = await this.anilistQuery(
+        `query ($id: Int) {
           Media(id: $id, type: ANIME) {
             id
             title { romaji english }
@@ -447,28 +448,28 @@ export class Miruro {
               }
             }
           }
-        }
-      `;
-      const data = await this.anilistQuery(gql, { id: Number(anilistId) });
+        }`,
+        { id: Number(anilistId) },
+      );
       if (!data.Media) return null;
       return {
         id: data.Media.id,
         title: data.Media.title,
-        relations: (data.Media.relations?.edges || []).map((e: any) => {
-          if (e.node) applyRemapsToMedia(e.node);
-          return e;
+        relations: (data.Media.relations?.edges || []).map((edge: any) => {
+          applyRemapsToMedia(edge.node);
+          return edge;
         }),
       };
     } catch (err) {
-      Logger.error(`Miruro relations error: ${String(err)}`);
+      Logger.error(`[Miruro] relations failed for ${anilistId}: ${String(err)}`);
       return null;
     }
   }
 
   static async recommendations(anilistId: string | number, page = 1, perPage = 10) {
     try {
-      const gql = `
-        query ($id: Int, $page: Int, $perPage: Int) {
+      const data = await this.anilistQuery(
+        `query ($id: Int, $page: Int, $perPage: Int) {
           Media(id: $id, type: ANIME) {
             id
             title { romaji english }
@@ -493,97 +494,80 @@ export class Miruro {
               }
             }
           }
-        }
-      `;
-      const data = await this.anilistQuery(gql, { id: Number(anilistId), page, perPage });
-      const recs = data.Media?.recommendations || {};
-      const pageInfo = recs.pageInfo || {};
+        }`,
+        { id: Number(anilistId), page, perPage },
+      );
+      const recommendations = data.Media?.recommendations;
       return {
-        page: pageInfo.currentPage || page,
-        perPage: pageInfo.perPage || perPage,
-        total: pageInfo.total || 0,
-        hasNextPage: pageInfo.hasNextPage || false,
-        recommendations: (recs.nodes || []).map((n: any) => {
-          if (n.mediaRecommendation) applyRemapsToMedia(n.mediaRecommendation);
-          return n;
+        ...paged(recommendations?.pageInfo, page, perPage),
+        recommendations: (recommendations?.nodes || []).map((node: any) => {
+          applyRemapsToMedia(node.mediaRecommendation);
+          return node;
         }),
       };
     } catch (err) {
-      Logger.error(`Miruro recommendations error: ${String(err)}`);
+      Logger.error(`[Miruro] recommendations failed for ${anilistId}: ${String(err)}`);
       return null;
     }
   }
 
-  // ─── Streaming ───────────────────────────────────────────────────────────────
-
   static async episodes(anilistId: string | number) {
     try {
-      const data = await this.fetchRawEpisodes(anilistId);
-      return injectSourceSlugs(data, anilistId);
+      const entry = await this.lookup(anilistId);
+      if (!entry) return null;
+
+      const kind = entry.format === "MOVIE" ? "film" : "regular";
+      const { data } = await catalog<{ data: CatalogEpisode[] }>(
+        `anime/${entry.id}/episodes?kind=${kind}&limit=10000`,
+      );
+      return {
+        id: entry.id,
+        anilistId: Number(anilistId),
+        episodes: data.map((ep) => ({
+          id: `watch/all/${Number(anilistId)}/all/${ep.episode_number}`,
+          number: ep.episode_number,
+          title: ep.title,
+          description: ep.synopsis,
+          image: ep.thumbnail_url,
+          airDate: ep.aired_on,
+          duration: ep.duration_seconds,
+          filler: ep.canon_type === "filler",
+          skipTimes: (ep.skip_times ?? []).map((skip) => ({
+            type: skip.kind,
+            start: skip.start_seconds,
+            end: skip.end_seconds,
+          })),
+        })),
+      };
     } catch (err) {
-      Logger.error(`Miruro episodes error: ${String(err)}`);
+      Logger.error(`[Miruro] episodes failed for ${anilistId}: ${String(err)}`);
       return null;
     }
   }
 
   static async watch(provider: string, anilistId: string | number, category: string, slug: string) {
     try {
-      const data = await this.fetchRawEpisodes(anilistId);
-      const provData = data.providers?.[provider] || {};
-      
-      let epList = provData.episodes?.[category] || [];
-      if (!Array.isArray(epList) && Array.isArray(provData.episodes)) {
-        epList = provData.episodes; // fallback for flat arrays
-      }
+      const episode = Number(slug.match(/(\d+)$/)?.[1]);
+      if (!episode) return null;
 
-      let targetId = null;
-      for (const ep of epList) {
-        const origId = String(ep.id || "");
-        const prefix = origId.includes(":") ? origId.split(":")[0] : origId;
-        const generated = `${prefix}-${ep.number}`;
-        if (generated === slug) {
-          targetId = origId;
-          break;
-        }
-      }
+      const entry = await this.lookup(anilistId);
+      if (!entry) return null;
 
-      if (!targetId) {
-        throw new Error(`Episode slug '${slug}' not found for provider ${provider}`);
-      }
+      const { tracks } = await catalog<Playback>(`anime/${entry.id}/episodes/${episode}/play`);
+      const matched = tracks
+        .filter(({ track }) => category === "all" || track === category)
+        .map(({ track, providers }) => ({
+          track,
+          providers: providers
+            .filter((item) => provider === "all" || item.provider === provider)
+            .map(withProxies),
+        }))
+        .filter(({ providers }) => providers.length > 0);
 
-      // Hit secure pipe for sources
-      const encId = Buffer.from(targetId).toString("base64url");
-      const payload = {
-        path: "sources",
-        method: "GET",
-        query: {
-          episodeId: encId,
-          provider,
-          category,
-          anilistId: Number(anilistId),
-        },
-        body: null,
-        version: "0.1.0",
-      };
-
-      const encodedReq = encodePipeRequest(payload);
-      const res = await fetch(`${this.pipeUrl}?e=${encodedReq}`, {
-        headers: this.headers(),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Pipe request failed: HTTP ${res.status}`);
-      }
-      const text = await res.text();
-      return decodePipeResponse(text.trim());
+      return matched.length ? { anilistId: Number(anilistId), episode, tracks: matched } : null;
     } catch (err) {
-      Logger.error(`Miruro watch error: ${String(err)}`);
+      Logger.error(`[Miruro] watch failed for ${anilistId}/${slug}: ${String(err)}`);
       return null;
     }
-  }
-
-  static async watchById(episodeId: string) {
-    // Deprecated by slug watch
-    return null;
   }
 }

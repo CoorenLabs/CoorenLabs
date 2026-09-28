@@ -2,7 +2,6 @@ import { Elysia } from "elysia";
 import { mangaballRoutes } from "./mangaball/route";
 import { allmangaRoutes } from "./allmanga/route";
 import { atsuRoutes } from "./atsu/route";
-import { mangafireRoutes } from "./mangafire/route";
 
 export const mangaRoutes = new Elysia({ prefix: "/manga" })
   .get(
@@ -11,17 +10,17 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
       return {
         service: "manga",
         description: "Unified manga API — provider-isolated route architecture",
-        providers: ["mangaball", "allmanga", "atsu", "mangafire"],
+        providers: ["mangaball", "allmanga", "atsu"],
         endpoints: {
           mangaball: [
             "GET /manga/mangaball/home          → Featured titles and banners",
             "GET /manga/mangaball/latest        → Latest updated titles",
             "GET /manga/mangaball/recommendation→ Recommended titles",
-            "GET /manga/mangaball/popular       → Popular titles this season",
+            "GET /manga/mangaball/popular       → Most viewed titles",
             "GET /manga/mangaball/added         → Recently added titles",
             "GET /manga/mangaball/new-chap      → Titles with new chapters",
-            "GET /manga/mangaball/foryou        → Personalized suggestions (?time=day|week|month|year)",
-            "GET /manga/mangaball/recent        → Recent chapter reads (?time=day|week|month|year)",
+            "GET /manga/mangaball/foryou        → Most read titles (?time=day|week|month)",
+            "GET /manga/mangaball/recent        → Most read chapters (?time=day|week|month)",
             "GET /manga/mangaball/search        → Search titles (?q=query&page=1)",
             "GET /manga/mangaball/filters       → Advanced filtering with tags and sorts",
             "GET /manga/mangaball/manga         → Browse Japanese Manga",
@@ -30,7 +29,7 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
             "GET /manga/mangaball/comics        → Browse English Comics",
             "GET /manga/mangaball/ongoing       → Browse ongoing series",
             "GET /manga/mangaball/completed     → Browse completed series",
-            "GET /manga/mangaball/detail/:slug  → Full title details and chapter list",
+            "GET /manga/mangaball/detail/:slug  → Full title details and chapter list (?lang=en|all)",
             "GET /manga/mangaball/read/:id      → Chapter images and metadata",
             "GET /manga/mangaball/tags          → List all available tags/genres",
             "GET /manga/mangaball/tags-detail   → Detailed tag statistics",
@@ -42,7 +41,7 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
             "GET /manga/allmanga/popular        → Popular titles (?page=1&period=daily|weekly|monthly|all)",
             "GET /manga/allmanga/random         → Random recommendations",
             "GET /manga/allmanga/search         → Search titles (?q=query&page=1)",
-            "GET /manga/allmanga/tags           → List all available tags, genres, and magazines",
+            "GET /manga/allmanga/tags           → List all available tags, genres, and magazines (?page=1)",
             "GET /manga/allmanga/genre/:genre   → Search titles by genre/tag slug (?page=1)",
             "GET /manga/allmanga/author/:author → Search titles by author slug (?page=1)",
             "GET /manga/allmanga/detail         → Full title details and chapter list (?id=MangaID)",
@@ -84,17 +83,6 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
             "--- UTILS ---",
             "GET /manga/atsu/image/* → Image proxy for bypass",
           ],
-          mangafire: [
-            "GET /manga/mangafire/home          → Featured sections",
-            "GET /manga/mangafire/search        → Search by keyword (?q=query&page=1)",
-            "GET /manga/mangafire/latest        → Latest updated list (?page=1)",
-            "GET /manga/mangafire/category/:id  → Browse by category type (?page=1)",
-            "GET /manga/mangafire/genre/:id     → Browse by genre (?page=1)",
-            "GET /manga/mangafire/detail/:id    → Manga details",
-            "GET /manga/mangafire/chapters/:id  → Chapters list or available languages (?lang=en)",
-            "GET /manga/mangafire/read/:id      → Chapter images",
-            "GET /manga/mangafire/volumes/:id   → Manga volumes (?lang=en)",
-          ],
         },
       };
     },
@@ -107,5 +95,4 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
   )
   .use(mangaballRoutes)
   .use(allmangaRoutes)
-  .use(atsuRoutes)
-  .use(mangafireRoutes);
+  .use(atsuRoutes);

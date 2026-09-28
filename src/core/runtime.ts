@@ -1,26 +1,15 @@
-export const isBun = typeof Bun !== "undefined"; // @ts-expect-error - Bun global
-export const isDeno = typeof Deno !== "undefined";
+type DenoRuntime = {
+  env: { get(key: string): string | undefined };
+  serve(
+    options: { port: number },
+    handler: (request: Request) => Response | Promise<Response>,
+  ): unknown;
+};
 
-export const isNode = !isBun && !isDeno && typeof process !== "undefined";
+export const deno = (globalThis as { Deno?: DenoRuntime }).Deno;
+export const isBun = typeof Bun !== "undefined";
+export const isNode = !isBun && !deno;
 
-export const runtime = isBun ? "bun" : isDeno ? "deno" : "node";
-
-/**
- * Get environment variable in a cross-runtime way
- */
-export function getEnv(key: string): string | undefined {
-  if (isBun) return Bun.env[key];
-  // @ts-expect-error - Deno global
-  if (isDeno) return Deno.env.get(key);
-
-  return process.env[key];
-}
-
-export const env = new Proxy(
-  {},
-  {
-    get(_, key: string) {
-      return getEnv(key);
-    },
-  },
-) as Record<string, string | undefined>;
+export const env = new Proxy({} as Record<string, string | undefined>, {
+  get: (_, key: string) => (deno ? deno.env.get(key) : process.env[key]),
+});
