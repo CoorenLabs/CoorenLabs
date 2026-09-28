@@ -3,6 +3,7 @@ import { memo, TTL } from "../core/cache.js";
 import { fetchJson, fetchText, notFound, UA, withStatus } from "../core/http.js";
 import { buildTitles, uniqueBy, watchId } from "../core/utils.js";
 import { extractFlixcloud } from "../extractors/flixcloud.js";
+import { flixcloudHlsUrl } from "../extractors/flixcloud-hls.js";
 
 const BASE = "https://reanime.to";
 const FLIX = "https://flixcloud.cc";
@@ -12,6 +13,13 @@ const SERVER_ORDER = { "HD-2": 0, "HD-1": 1 };
 
 function api(path) {
   return fetchJson(`${BASE}${path}`, { label: LABEL, headers: HEADERS });
+}
+
+function embedUrl(link, audio) {
+  if (audio !== "dub" || !URL.canParse(link)) return link;
+  const url = new URL(link);
+  url.searchParams.set("a", "1");
+  return url.href;
 }
 
 function coverAnilistId(cover) {
@@ -142,15 +150,8 @@ export async function getEpisodes(anilistId, ctx = {}) {
 
 async function resolveStreams(anilistId, audio, episode) {
   const series = await resolveSeries(anilistId);
-  const [watchData, flixData] = await Promise.all([
-    api(`/api/watch/${series.animeId}/${episode}`).catch(() => null),
-    api(`/api/flix/${anilistId}/${episode}`).catch(() => null),
-  ]);
-  const links = [...(watchData?.episode_links ?? [])];
-  if (flixData?.success && flixData.servers) {
-    const known = new Set(links.map((server) => server.$id));
-    links.push(...flixData.servers.filter((server) => !known.has(server.$id)));
-  }
+  const flixData = await api(`/api/flix/${anilistId}/${episode}`).catch(() => null);
+  const links = flixData?.success ? (flixData.servers ?? []) : [];
   const types = audio === "sub" ? ["sub", "s-sub"] : ["dub", "s-dub"];
   const servers = uniqueBy(
     links
@@ -161,8 +162,9 @@ async function resolveStreams(anilistId, audio, episode) {
   if (!servers.length) throw notFound(`No ${audio} servers for "${series.title}" ep ${episode}`);
   const decrypted = await Promise.all(
     servers.map(async (server, index) => {
+      const embed = embedUrl(server.dataLink, audio);
       try {
-        const html = await fetchText(server.dataLink, {
+        const html = await fetchText(embed, {
           label: LABEL,
           headers: { ...HEADERS, Referer: `${BASE}/` },
         });
@@ -171,7 +173,7 @@ async function resolveStreams(anilistId, audio, episode) {
           headers: HEADERS,
           referer: `${BASE}/`,
         });
-        return { server, stream, index };
+        return { server, embed, stream, index };
       } catch (error) {
         return { server, error: error.message, index };
       }
@@ -183,15 +185,11 @@ async function resolveStreams(anilistId, audio, episode) {
       new Error(decrypted.find((item) => item.error)?.error || "No decrypted streams"),
       502,
     );
-  return { series, watchData, servers, streams, failed: decrypted.filter((item) => item.error) };
+  return { series, servers, streams, failed: decrypted.filter((item) => item.error) };
 }
 
-export async function watch(anilistId, audio, episode) {
-  const { series, watchData, servers, streams, failed } = await resolveStreams(
-    anilistId,
-    audio,
-    episode,
-  );
+export async function watch(anilistId, audio, episode, { basePath = "" } = {}) {
+  const { series, servers, streams, failed } = await resolveStreams(anilistId, audio, episode);
   const [{ stream, server }] = streams;
   return {
     anime: series.title,
@@ -200,14 +198,16 @@ export async function watch(anilistId, audio, episode) {
     audio,
     server: server.serverName,
     stream_url: stream.url,
+    proxiedUrl: flixcloudHlsUrl(stream, basePath),
     streams: uniqueBy(
       streams.map((item) => ({
         server: item.server.serverName,
         audio: item.server.dataType,
         index: item.index,
         url: item.stream.url,
+        proxiedUrl: flixcloudHlsUrl(item.stream, basePath),
         type: "hls",
-        embed: item.server.dataLink,
+        embed: item.embed,
         subtitles: item.stream.subtitles ?? [],
         thumbnails_vtt: item.stream.thumbnails_vtt ?? null,
         video_title: item.stream.video_title ?? null,
@@ -221,19 +221,15 @@ export async function watch(anilistId, audio, episode) {
     video_title: stream.video_title,
     intro: stream.intro_chapter,
     outro: stream.outro_chapter,
-    intro_start: watchData?.intro_start ?? null,
-    intro_end: watchData?.intro_end ?? null,
-    outro_start: watchData?.outro_start ?? null,
-    outro_end: watchData?.outro_end ?? null,
     embeds: servers.map((item) => ({
       name: item.serverName,
       type: item.dataType,
-      url: item.dataLink,
+      url: embedUrl(item.dataLink, audio),
     })),
     allServers: servers.map((item) => ({
       name: item.serverName,
       type: item.dataType,
-      embed: item.dataLink,
+      embed: embedUrl(item.dataLink, audio),
     })),
     failedServers: failed.map((item) => ({
       name: item.server.serverName,
@@ -243,6 +239,7 @@ export async function watch(anilistId, audio, episode) {
   };
 }
 
-export async function stream(anilistId, audio, episode) {
-  return (await resolveStreams(anilistId, audio, episode)).streams[0].stream.url;
+export async function stream(anilistId, audio, episode, { basePath = "" } = {}) {
+  const [first] = (await resolveStreams(anilistId, audio, episode)).streams;
+  return flixcloudHlsUrl(first.stream, basePath);
 }

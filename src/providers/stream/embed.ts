@@ -1,11 +1,8 @@
-import type { connect } from "puppeteer-real-browser";
 import { Cache } from "../../core/cache";
+import { type Page, withPage } from "../../core/lib/browser";
 import { Logger } from "../../core/logger";
 import { proxyUrl } from "../../core/proxy";
 
-type Browser = Awaited<ReturnType<typeof connect>>["browser"];
-type Context = Awaited<ReturnType<Browser["createBrowserContext"]>>;
-type Page = Awaited<ReturnType<Context["newPage"]>>;
 type Capture = { url: string; referer: string; server: number };
 
 export class StreamError extends Error {
@@ -17,7 +14,6 @@ export class StreamError extends Error {
   }
 }
 
-const MAX_PAGES = 3;
 const DEADLINE_MS = 22_000;
 const FIRST_SERVER_MS = 12_000;
 const SERVER_MS = 6_000;
@@ -30,67 +26,7 @@ const MEDIA_ID = /^(?:tt)?\d+$/;
 const NUMBER = /^\d+$/;
 const PLAYLIST = /\.m3u8(?:[?#]|$)/i;
 
-const LAUNCH_ARGS = [
-  "--disable-notifications",
-  "--mute-audio",
-  "--no-sandbox",
-  "--disable-setuid-sandbox",
-  "--window-size=1280,720",
-  "--window-position=-32000,-32000",
-  "--hide-scrollbars",
-  "--disable-blink-features=AutomationControlled",
-  "--disable-background-timer-throttling",
-  "--disable-backgrounding-occluded-windows",
-  "--disable-renderer-backgrounding",
-  "--disable-features=PictureInPicture,MediaSessionService,DocumentPictureInPictureAPI",
-];
-
-let browser: Promise<Browser> | null = null;
-let active = 0;
-const waiting: (() => void)[] = [];
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function getBrowser(): Promise<Browser> {
-  if (browser) return browser;
-  Logger.info("[stream] Launching browser");
-  const launching = import("puppeteer-real-browser")
-    .then(({ connect }) =>
-      connect({
-        headless: false,
-        turnstile: true,
-        disableXvfb: false,
-        ignoreAllFlags: false,
-        args: LAUNCH_ARGS,
-      }),
-    )
-    .then(({ browser: instance }) => {
-      instance.once("disconnected", () => {
-        if (browser === launching) browser = null;
-      });
-      return instance;
-    });
-  launching.catch(() => {
-    if (browser === launching) browser = null;
-  });
-  browser = launching;
-  return launching;
-}
-
-async function withPage<T>(task: (page: Page) => Promise<T>): Promise<T> {
-  if (active < MAX_PAGES) active++;
-  else await new Promise<void>((resolve) => waiting.push(resolve));
-  let context: Context | undefined;
-  try {
-    context = await (await getBrowser()).createBrowserContext();
-    return await task(await context.newPage());
-  } finally {
-    void context?.close().catch(() => undefined);
-    const next = waiting.shift();
-    if (next) next();
-    else active--;
-  }
-}
 
 function variantsOf(playlist: string, base: string): string[] {
   if (!playlist.includes("#EXT-X-STREAM-INF")) return [];

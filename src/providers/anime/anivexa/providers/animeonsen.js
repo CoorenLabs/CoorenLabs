@@ -1,6 +1,13 @@
 import { getMedia } from "../core/anilist.js";
 import { forget, memo, TTL } from "../core/cache.js";
-import { cookiesFrom, HTML_ACCEPT, parseJson, request, upstreamError } from "../core/http.js";
+import {
+  cookiesFrom,
+  HTML_ACCEPT,
+  notFound,
+  parseJson,
+  request,
+  upstreamError,
+} from "../core/http.js";
 import {
   attr,
   bestDice,
@@ -192,7 +199,7 @@ function resolveSeries(anilistId, ctx = {}) {
       (!exact.length &&
         (selected.score < 0.82 || (runnerUp && selected.score - runnerUp.score < 0.08)))
     )
-      throw new Error(`AnimeOnsen match not confident for AniList ${anilistId}`);
+      throw notFound(`AnimeOnsen match not confident for AniList ${anilistId}`);
     return {
       contentId: selected.contentId,
       title: selected.title,

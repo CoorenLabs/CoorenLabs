@@ -1,13 +1,10 @@
 import { TTL } from "../core/cache.js";
 import * as dhive from "./2dhive.js";
 import * as anibd from "./anibd.js";
-import * as anidbapp from "./anidbapp.js";
 import * as anikoto from "./anikoto.js";
-import * as animedunya from "./animedunya.js";
 import * as animegg from "./animegg.js";
 import * as animenosub from "./animenosub.js";
 import * as animeonsen from "./animeonsen.js";
-import * as anineko from "./anineko.js";
 import * as aniwaves from "./aniwaves.js";
 import * as anizone from "./anizone.js";
 import * as kaa from "./kickassanime.js";
@@ -20,8 +17,6 @@ export const PROVIDERS = {
   reanime,
   anikoto,
   animegg,
-  anineko,
-  anidbapp,
   "2dhive": dhive,
   animenosub,
   anizone,
@@ -29,7 +24,6 @@ export const PROVIDERS = {
   anibd,
   senshi,
   kaa,
-  animedunya,
   animeonsen,
 };
 

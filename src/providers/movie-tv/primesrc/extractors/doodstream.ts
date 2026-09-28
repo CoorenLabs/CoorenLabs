@@ -19,6 +19,11 @@ export async function extractDoodstream(url: string): Promise<Extracted | undefi
       return;
     }
 
+    if (/has been removed|temporarily unavailable/i.test(page.text)) {
+      Logger.debug(`[doodstream] ${id} is no longer available`);
+      return;
+    }
+
     const path = page.text.match(/\/pass_md5\/[^'"]*/)?.[0];
     const token = page.text.match(/\?token=([^&]*)&/)?.[1];
     if (!path || !token) {

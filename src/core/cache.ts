@@ -1,4 +1,3 @@
-import { Redis } from "@upstash/redis";
 import { Logger } from "./logger";
 import { env, isBun } from "./runtime";
 
@@ -7,81 +6,70 @@ type Store = {
   set(key: string, value: string, ttl: number): Promise<unknown>;
 };
 
-const DEFAULT_TTL = parseInt(env.DEFAULT_CACHE_TTL || "-1", 10);
-if (Number.isNaN(DEFAULT_TTL)) {
-  throw new Error(`Invalid DEFAULT_CACHE_TTL: ${env.DEFAULT_CACHE_TTL}`);
-}
-
 async function createStore(): Promise<Store | null> {
-  if (env.ENABLE_CACHE !== "true") {
-    Logger.info("[Cache] Disabled");
+  const url = env.REDIS_URL;
+  if (!url) {
+    Logger.info("[Cache] Disabled (REDIS_URL is not set)");
     return null;
   }
-
-  const provider = env.CACHE_PROVIDER;
-
-  if (provider === "default") {
-    if (!isBun) {
-      Logger.warn("[Cache] The default provider needs Bun's RedisClient; caching is disabled");
-      return null;
-    }
-    if (!env.REDIS_URL) throw new Error("REDIS_URL is required for the default cache provider");
-    const { RedisClient } = await import("bun");
-    const client = new RedisClient(env.REDIS_URL, {
-      autoReconnect: true,
-      connectionTimeout: 10_000,
-      maxRetries: 3,
-    });
-    Logger.info("[Cache] Using Redis");
-    return {
-      get: (key) => client.get(key),
-      set: (key, value, ttl) =>
-        ttl > 0 ? client.set(key, value, "EX", ttl) : client.set(key, value),
-    };
+  if (!isBun) {
+    Logger.warn("[Cache] Redis caching needs the Bun runtime; running without cache");
+    return null;
   }
-
-  if (provider === "upstash" || provider === "uptash") {
-    const url = env.UPSTASH_REDIS_REST_URL;
-    const token = env.UPSTASH_REDIS_REST_TOKEN;
-    if (!url || !token) {
-      throw new Error(
-        "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required for the upstash cache provider",
-      );
-    }
-    const client = new Redis({ url, token, automaticDeserialization: false });
-    Logger.info("[Cache] Using Upstash Redis");
-    return {
-      get: (key) => client.get<string>(key),
-      set: (key, value, ttl) =>
-        ttl > 0 ? client.set(key, value, { ex: ttl }) : client.set(key, value),
-    };
+  const { RedisClient } = await import("bun");
+  const client = new RedisClient(url, {
+    autoReconnect: true,
+    connectionTimeout: 5_000,
+    maxRetries: 3,
+  });
+  try {
+    await client.connect();
+  } catch (err) {
+    client.close();
+    Logger.warn(`[Cache] Redis is unreachable (${(err as Error).message}); running without cache`);
+    return null;
   }
-
-  throw new Error(`Invalid CACHE_PROVIDER: ${provider}`);
+  Logger.info("[Cache] Enabled (Redis)");
+  return {
+    get: (key) => client.get(key),
+    set: (key, value, ttl) => client.set(key, value, "EX", Math.max(1, Math.ceil(ttl))),
+  };
 }
 
 const store = await createStore();
+let healthy = true;
+
+function report(action: string, err: unknown) {
+  const message = `[Cache] ${action} failed: ${(err as Error).message}`;
+  if (healthy) Logger.warn(message);
+  else Logger.debug(message);
+  healthy = false;
+}
 
 export const Cache = {
+  enabled: store !== null,
+
   async get(key: string): Promise<string | null> {
     if (!store) return null;
     try {
       const value = await store.get(key);
+      healthy = true;
       Logger.debug(`[Cache] ${value === null ? "MISS" : "HIT"} ${key}`);
       return value;
     } catch (err) {
-      Logger.error(`[Cache] Read failed for ${key}`, err);
+      report("Read", err);
       return null;
     }
   },
 
-  async set(key: string, value: string, ttl = DEFAULT_TTL): Promise<boolean> {
+  async set(key: string, value: string, ttl: number): Promise<boolean> {
     if (!store) return false;
     try {
       await store.set(key, value, ttl);
+      healthy = true;
       return true;
     } catch (err) {
-      Logger.error(`[Cache] Write failed for ${key}`, err);
+      report("Write", err);
       return false;
     }
   },
@@ -96,7 +84,7 @@ export const Cache = {
     }
   },
 
-  setJson(key: string, value: unknown, ttl?: number): Promise<boolean> {
+  setJson(key: string, value: unknown, ttl: number): Promise<boolean> {
     return Cache.set(key, JSON.stringify(value), ttl);
   },
 

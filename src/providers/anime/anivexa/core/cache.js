@@ -1,6 +1,5 @@
 import { Cache } from "../../../../core/cache";
 import { Logger } from "../../../../core/logger";
-import { env } from "../../../../core/runtime";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -18,7 +17,7 @@ export const TTL = {
   identity: DAY,
 };
 
-const CACHE_ENABLED = env.ENABLE_CACHE === "true";
+const CACHE_ENABLED = Cache.enabled;
 
 const entries = new Map();
 const memos = new Map();

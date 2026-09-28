@@ -1,7 +1,7 @@
 export const HOME_QUERY = `
-  query ($season: MediaSeason, $seasonYear: Int, $spotlight: [Int], $withSpotlight: Boolean!) {
-    spotlight: Page(page: 1, perPage: 50) @include(if: $withSpotlight) {
-      media(id_in: $spotlight, type: ANIME) {
+  query ($season: MediaSeason, $seasonYear: Int) {
+    spotlight: Page(page: 1, perPage: 20) {
+      media(type: ANIME, status: RELEASING, isAdult: false, sort: TRENDING_DESC) {
         ...listFields
         description
         season

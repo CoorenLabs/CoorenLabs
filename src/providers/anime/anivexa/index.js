@@ -3,6 +3,7 @@ import { getMedia } from "./core/anilist.js";
 import { cached, isFresh, mapTtl, read, write } from "./core/cache.js";
 import { getEpisodesResponse, getFilteredEpisodesResponse } from "./core/episode-cache.js";
 import { mapAnimeIds } from "./core/mapper.js";
+import { flixcloudHls } from "./extractors/flixcloud-hls.js";
 import { stream as dhiveStream } from "./providers/2dhive.js";
 import { PROVIDER_NAMES, PROVIDERS, resolveProviders, watchTtl } from "./providers/index.js";
 import { captchaPage } from "./providers/mkissa.js";
@@ -107,7 +108,12 @@ const ROUTE_HANDLERS = [
   [/^\/watch\/([a-z0-9]+)\/(\d+)\/(sub|dub)\/([a-z0-9]+)-(\d+)\/?$/, watchRoute],
   [
     /^\/stream\/reanime\/(\d+)\/(sub|dub)\/(\d+)\/?$/,
-    async ([, id, audio, episode]) => redirect(await reanimeStream(id, audio, Number(episode))),
+    async ([, id, audio, episode], context) =>
+      redirect(await reanimeStream(id, audio, Number(episode), context)),
+  ],
+  [
+    /^\/hls\/flixcloud\/(playlist\.m3u8|segment\.ts)$/,
+    ([, file], context) => flixcloudHls(file, context),
   ],
   [
     /^\/stream\/2dhive\/(\d+)\/(sub|dub)\/(\d+)\/?$/,

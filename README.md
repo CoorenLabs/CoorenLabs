@@ -27,7 +27,7 @@ Developed and maintained by [CoorenLabs](https://coorenlabs.com).
 - **Unified Media Ecosystem**: Anime, Manga, Movies, TV, and Music.
 - **High Performance**: Native speed powered by Bun and ElysiaJS.
 - **Built-in Stream Proxy**: HLS, MP4 and file proxy with playlist rewriting and byte-range support.
-- **Optional Caching**: Redis (Bun) or Upstash Redis.
+- **Optional Caching**: Redis, enabled by setting `REDIS_URL`.
 
 ---
 
@@ -37,8 +37,7 @@ Developed and maintained by [CoorenLabs](https://coorenlabs.com).
 - **Framework**: ElysiaJS
 - **Language**: TypeScript
 - **Scraping**: Cheerio, puppeteer-real-browser
-- **Cache**: Redis / Upstash Redis
-- **Testing**: Vitest
+- **Cache**: Redis
 
 ---
 
@@ -78,25 +77,18 @@ bun run build:node
 
 ## Configuration
 
-| Variable                                              | Default                  | Description                                                                        |
-| ----------------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------- |
-| `PORT`                                                | `3000`                   | HTTP port.                                                                         |
-| `NODE_ENV`                                            | `development`            | `development`, `production` or `test`.                                             |
-| `SERVER_ORIGIN`                                       | —                        | Public origin of this server (required outside tests); used to build proxied URLs. |
-| `LOG_LEVEL`                                           | `info`                   | `debug`, `info`, `warn`, `error` or `silent`.                                      |
-| `CORS_ORIGIN`                                         | `*`                      | `*` or a comma-separated list of allowed origins.                                  |
-| `CORS_CREDENTIALS`                                    | `false`                  | Allow credentialed CORS requests.                                                  |
-| `OPENAPI_ENABLED`                                     | `true`                   | Serve the OpenAPI docs at `/docs`.                                                 |
-| `OPENAPI_VERSION`                                     | `3.0.0`                  | Version reported by `/` and the OpenAPI document.                                  |
-| `ENABLE_CACHE`                                        | `false`                  | Enable response caching.                                                           |
-| `CACHE_PROVIDER`                                      | —                        | `default` (Redis via Bun's client, needs `REDIS_URL`) or `upstash`.                |
-| `DEFAULT_CACHE_TTL`                                   | `-1`                     | Default TTL in seconds; `-1` keeps entries forever.                                |
-| `REDIS_URL`                                           | —                        | Redis connection URL for the `default` provider.                                   |
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | —                        | Credentials for the `upstash` provider.                                            |
-| `ANILIST_SPOTLIGHT_IDS`                               | —                        | Comma-separated AniList IDs for the meta spotlight.                                |
-| `DATABASE_URL`                                        | —                        | Neon Postgres URL for metadata remaps (optional).                                  |
-| `REMAP_REFRESH_INTERVAL`                              | `600000`                 | Remap refresh interval in milliseconds.                                            |
-| `WREQ_BROWSER` / `WREQ_OS`                            | `chrome_149` / `windows` | Browser TLS fingerprint used by providers that need impersonated requests.         |
+All variables are optional in development; see `.env.example`.
+
+| Variable           | Default                 | Description                                                      |
+| ------------------ | ----------------------- | ---------------------------------------------------------------- |
+| `PORT`             | `3000`                  | HTTP port.                                                       |
+| `NODE_ENV`         | `development`           | `development` or `production`.                                   |
+| `SERVER_ORIGIN`    | `http://localhost:PORT` | Public URL used in proxied stream links; required in production. |
+| `LOG_LEVEL`        | `info`                  | `debug`, `info`, `warn`, `error` or `silent`.                    |
+| `CORS_ORIGIN`      | `*`                     | `*` or a comma-separated list of allowed origins.                |
+| `CORS_CREDENTIALS` | `false`                 | Allow credentialed CORS requests.                                |
+| `REDIS_URL`        | —                       | Enables caching when set (Bun runtime).                          |
+| `DATABASE_URL`     | —                       | Neon Postgres URL for AniList metadata overrides.                |
 
 ---
 
@@ -130,10 +122,9 @@ export const primesrcRoutes = new Elysia({ prefix: "/primesrc" }).get(
 
 ---
 
-## Testing & Linting
+## Checks
 
 ```bash
-bun run test
 bun run typecheck
 bun run lint
 bun run lint:fix

@@ -18,7 +18,10 @@ export const anivexaRoutes = new Elysia({ prefix: "/anivexa" })
   .get("/*", ({ request }) => {
     const url = new URL(request.url);
     url.pathname = url.pathname.replace(/^\/anime\/anivexa/, "") || "/";
-    return anivexaWorker.fetch(new Request(url, { headers: request.headers }), {
-      basePath: BASE_PATH,
-    });
+    return anivexaWorker.fetch(
+      new Request(url, { headers: request.headers, signal: request.signal }),
+      {
+        basePath: BASE_PATH,
+      },
+    );
   });

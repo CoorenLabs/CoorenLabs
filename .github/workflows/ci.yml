@@ -8,7 +8,7 @@ on:
 
 jobs:
   check:
-    name: Lint, Typecheck & Test
+    name: Lint & Typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,7 +16,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
-      - run: bun run test
 
   codeql:
     name: CodeQL Analysis

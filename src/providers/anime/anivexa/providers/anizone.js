@@ -1,6 +1,13 @@
 import { getMedia, getPrequelOffset } from "../core/anilist.js";
 import { memo, TTL } from "../core/cache.js";
-import { cookiesFrom, HTML_ACCEPT, parseJson, request, upstreamError } from "../core/http.js";
+import {
+  cookiesFrom,
+  HTML_ACCEPT,
+  notFound,
+  parseJson,
+  request,
+  upstreamError,
+} from "../core/http.js";
 import {
   alignEpisodes,
   buildTitles,
@@ -112,7 +119,7 @@ function resolveSeries(anilistId, ctx = {}) {
       titles,
       expectedCount(media, ctx.anizip),
     );
-    if (!selected) throw new Error(`AniZone match not confident for AniList ${anilistId}`);
+    if (!selected) throw notFound(`AniZone match not confident for AniList ${anilistId}`);
     return {
       slug: selected.slug,
       title: selected.title,

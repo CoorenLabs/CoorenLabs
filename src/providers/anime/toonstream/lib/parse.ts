@@ -1,8 +1,8 @@
 import type { CheerioAPI } from "cheerio";
 import { Cache } from "../../../../core/cache";
 import { toonstream as BASE } from "../../../origins";
-import { extractSources } from "../../embeds";
-import { loadHtml } from "../../embeds/http";
+import { extractSources } from "../embeds";
+import { loadHtml } from "../embeds/http";
 
 const EMBEDS_TTL = 86_400;
 

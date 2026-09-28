@@ -1,15 +1,22 @@
 import { Cache } from "../cache";
 import { Logger } from "../logger";
-import { CF_CHALLENGE_STATUSES, CF_SIGNATURES, getCloudflareClearance } from "./cf-bypass";
+import { getCloudflareClearance } from "./cf-bypass";
+import { browserFetch } from "./impersonate";
 
 export type FetchResult = { success: boolean; status: number; text: string };
 
 type CfCredentials = { cookie: string; userAgent: string };
 
-const CF_CREDENTIALS_FALLBACK_TTL = 2 * 3600;
-const CF_BYPASS_ATTEMPTS = 3;
+const BLOCKED_STATUSES = [403, 503];
+const RATE_LIMIT_RETRY_DELAY = 2_000;
+const CREDENTIALS_FALLBACK_TTL = 2 * 3600;
+const UNSOLVABLE_BACKOFF = 10 * 60_000;
+const CLIENT_HINTS = ["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"];
 
 const remembered = new Map<string, { credentials: CfCredentials; expires: number }>();
+const solving = new Map<string, Promise<CfCredentials | null>>();
+const unsolvable = new Map<string, number>();
+const browserTlsHosts = new Set<string>();
 
 async function loadCredentials(key: string): Promise<CfCredentials | null> {
   const entry = remembered.get(key);
@@ -22,43 +29,53 @@ function saveCredentials(key: string, credentials: CfCredentials, ttl: number) {
   void Cache.setJson(key, credentials, ttl);
 }
 
-function withCredentials(init: RequestInit, credentials: CfCredentials): RequestInit {
+function browserHeaders(init: RequestInit, credentials: CfCredentials | null): Headers {
   const headers = new Headers(init.headers);
+  for (const hint of CLIENT_HINTS) headers.delete(hint);
+  if (!credentials) return headers;
   const cookie = headers.get("cookie");
-  headers.set("cookie", cookie ? `${credentials.cookie} ${cookie}` : credentials.cookie);
-  if (credentials.userAgent) headers.set("user-agent", credentials.userAgent);
-  return { ...init, headers };
+  headers.set("cookie", cookie ? `${credentials.cookie}; ${cookie}` : credentials.cookie);
+  headers.set("user-agent", credentials.userAgent);
+  return headers;
 }
 
-async function request(url: string, init: RequestInit): Promise<FetchResult> {
-  const res = await fetch(url, init);
+async function request(
+  url: string,
+  init: RequestInit,
+  { browserTls, credentials }: { browserTls: boolean; credentials: CfCredentials | null },
+): Promise<FetchResult> {
+  const res = browserTls
+    ? await browserFetch(url, {
+        method: init.method,
+        headers: browserHeaders(init, credentials),
+        body: typeof init.body === "string" ? init.body : undefined,
+      })
+    : await fetch(url, init);
   return { success: res.ok, status: res.status, text: await res.text() };
 }
 
-async function bypass(
-  url: string,
-  init: RequestInit,
-  label: string,
-  credentialsKey: string,
-): Promise<FetchResult | undefined> {
-  for (let attempt = 1; attempt <= CF_BYPASS_ATTEMPTS; attempt++) {
-    Logger.info(`[${label}] Cloudflare challenge, bypass attempt ${attempt}/${CF_BYPASS_ATTEMPTS}`);
-    const clearance = await getCloudflareClearance(url);
-    if (!clearance.success) continue;
-
-    const credentials = {
-      cookie: `cf_clearance=${clearance.cfClearance};`,
-      userAgent: clearance.userAgent,
-    };
-    saveCredentials(credentialsKey, credentials, clearance.ttl || CF_CREDENTIALS_FALLBACK_TTL);
-
-    const result = await request(url, withCredentials(init, credentials));
-    if (result.success) {
-      Logger.success(`[${label}] Cloudflare challenge bypassed`);
-      return result;
-    }
+function solve(url: string, key: string, label: string): Promise<CfCredentials | null> {
+  if ((unsolvable.get(key) ?? 0) > Date.now()) return Promise.resolve(null);
+  let pending = solving.get(key);
+  if (!pending) {
+    Logger.info(`[${label}] Cloudflare challenge on ${new URL(url).host}, solving in browser`);
+    pending = getCloudflareClearance(url)
+      .then((clearance) => {
+        if (!clearance.success) {
+          unsolvable.set(key, Date.now() + UNSOLVABLE_BACKOFF);
+          return null;
+        }
+        const credentials = {
+          cookie: `cf_clearance=${clearance.cfClearance}`,
+          userAgent: clearance.userAgent,
+        };
+        saveCredentials(key, credentials, clearance.ttl || CREDENTIALS_FALLBACK_TTL);
+        return credentials;
+      })
+      .finally(() => solving.delete(key));
+    solving.set(key, pending);
   }
-  Logger.error(`[${label}] Cloudflare bypass failed for ${url}`);
+  return pending;
 }
 
 export async function fetcher(
@@ -67,20 +84,39 @@ export async function fetcher(
   label = "default",
   init: RequestInit = {},
 ): Promise<FetchResult | undefined> {
-  const credentialsKey = `${label}:cf-clearance`;
+  const key = `${label}:cf-clearance`;
+  const { host } = new URL(url);
   try {
-    const credentials = detectCloudflare ? await loadCredentials(credentialsKey) : null;
-    const result = await request(url, credentials ? withCredentials(init, credentials) : init);
-    if (result.success) return result;
+    const credentials = detectCloudflare ? await loadCredentials(key) : null;
+    const browserTls = credentials !== null || browserTlsHosts.has(host);
+    const first = await request(url, init, { browserTls, credentials });
+    if (first.success || !detectCloudflare || !BLOCKED_STATUSES.includes(first.status)) {
+      if (!first.success) Logger.warn(`[${label}] HTTP ${first.status} from ${url}`);
+      return first;
+    }
 
-    Logger.warn(`[${label}] ${result.status} from ${url}`);
-    const challenged =
-      detectCloudflare &&
-      CF_CHALLENGE_STATUSES.includes(result.status) &&
-      CF_SIGNATURES.some((signature) => result.text.includes(signature));
+    if (credentials) {
+      await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_RETRY_DELAY));
+      const again = await request(url, init, { browserTls: true, credentials });
+      if (again.success) return again;
+    } else if (!browserTls) {
+      const impersonated = await request(url, init, { browserTls: true, credentials: null });
+      if (impersonated.success) {
+        browserTlsHosts.add(host);
+        return impersonated;
+      }
+    }
 
-    return (challenged && (await bypass(url, init, label, credentialsKey))) || result;
+    remembered.delete(key);
+    const cleared = await solve(url, key, label);
+    if (!cleared) {
+      Logger.warn(`[${label}] HTTP ${first.status} from ${url} (Cloudflare challenge unsolved)`);
+      return first;
+    }
+    const retried = await request(url, init, { browserTls: true, credentials: cleared });
+    if (!retried.success) Logger.warn(`[${label}] HTTP ${retried.status} after clearance: ${url}`);
+    return retried;
   } catch (err) {
-    Logger.error(`[${label}] Request failed for ${url}`, err);
+    Logger.warn(`[${label}] Request failed for ${url}: ${(err as Error).message}`);
   }
 }

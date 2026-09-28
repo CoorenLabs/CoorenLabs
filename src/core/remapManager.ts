@@ -1,5 +1,5 @@
 import { neon } from "@neondatabase/serverless";
-import { DATABASE_URL, REMAP_REFRESH_INTERVAL } from "./config";
+import { DATABASE_URL } from "./config";
 import { Logger } from "./logger";
 
 type RemapRow = {
@@ -14,18 +14,19 @@ type RemapRow = {
   [key: string]: any;
 };
 
+const REFRESH_INTERVAL = 10 * 60_000;
+
 class RemapManager {
   private remaps = new Map<number, RemapRow>();
   private readonly sql = DATABASE_URL ? neon(DATABASE_URL) : null;
 
   async init() {
     if (!this.sql) {
-      Logger.warn("[RemapManager] DATABASE_URL is not set; remapping is disabled");
+      Logger.info("[RemapManager] Disabled (DATABASE_URL is not set)");
       return;
     }
     await this.load();
-    setInterval(() => void this.load(), REMAP_REFRESH_INTERVAL);
-    Logger.info(`[RemapManager] Refreshing every ${REMAP_REFRESH_INTERVAL}ms`);
+    setInterval(() => void this.load(), REFRESH_INTERVAL);
   }
 
   private async load() {
@@ -34,7 +35,7 @@ class RemapManager {
       this.remaps = new Map(rows.map((row) => [Number(row.anilist_id), row]));
       Logger.info(`[RemapManager] Loaded ${this.remaps.size} remaps`);
     } catch (err) {
-      Logger.error(`[RemapManager] Failed to load remaps: ${String(err)}`);
+      Logger.error(`[RemapManager] Failed to load remaps: ${(err as Error).message}`);
     }
   }
 

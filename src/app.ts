@@ -1,13 +1,7 @@
 import cors from "@elysiajs/cors";
 import openapi from "@elysiajs/openapi";
 import { Elysia } from "elysia";
-import {
-  CORS_CREDENTIALS,
-  CORS_ORIGIN,
-  NODE_ENV,
-  OPENAPI_ENABLED,
-  OPENAPI_VERSION,
-} from "./core/config";
+import { CORS_CREDENTIALS, CORS_ORIGIN, NODE_ENV } from "./core/config";
 import { mappingRoutes } from "./core/mappingRoutes";
 import { proxyRoutes } from "./core/proxyRoutes";
 import { isNode } from "./core/runtime";
@@ -18,10 +12,12 @@ import { movieTvRoutes } from "./providers/movie-tv/route";
 import { musicRoutes } from "./providers/music/route";
 import { streamRoutes } from "./providers/stream/route";
 
+const VERSION = "3.0.0";
+
 const documentation = openapi({
   path: "/docs",
   documentation: {
-    info: { title: "Cooren API", version: OPENAPI_VERSION },
+    info: { title: "Cooren API", version: VERSION },
     tags: [
       { name: "anime", description: "📺 Anime Providers & Mappings" },
       { name: "meta", description: "🔍 Meta Providers — AniList-backed anime discovery" },
@@ -34,8 +30,7 @@ const documentation = openapi({
 });
 
 export async function createApp() {
-  const adapter =
-    isNode && NODE_ENV !== "test" ? (await import("@elysiajs/node")).node() : undefined;
+  const adapter = isNode ? (await import("@elysiajs/node")).node() : undefined;
 
   return new Elysia({ adapter, serve: { idleTimeout: 120 } })
     .use(
@@ -51,12 +46,12 @@ export async function createApp() {
         return Response.redirect(url.href, 301);
       }
     })
-    .use(OPENAPI_ENABLED ? documentation : new Elysia())
+    .use(documentation)
     .get(
       "/",
       () => ({
         name: "Cooren API",
-        version: OPENAPI_VERSION,
+        version: VERSION,
         repo: "https://github.com/CoorenLabs/CoorenLabs.git",
         environment: NODE_ENV,
         about:

@@ -1,13 +1,5 @@
 import { Logger } from "../logger";
-
-export const CF_CHALLENGE_STATUSES = [403, 429, 503];
-export const CF_SIGNATURES = [
-  "window._cf_chl_opt",
-  "<title>Just a moment...</title>",
-  "<title>Attention Required! | Cloudflare</title>",
-  'id="challenge-form"',
-  "__cf_chl_tk",
-];
+import { type Page, withPage } from "./browser";
 
 type Solved = { cfClearance: string; userAgent: string; ttl: number };
 type Clearance = ({ success: true } & Solved) | { success: false; error: string };
@@ -17,35 +9,16 @@ const POLL_INTERVAL = 250;
 const FALLBACK_TTL = 3600;
 const CHALLENGE_TITLES = ["Just a moment", "Cloudflare", "Attention Required"];
 
-let browser: any = null;
-let page: any = null;
-let queue: Promise<unknown> = Promise.resolve();
-
-async function ensurePage() {
-  if (browser?.isConnected() && page && !page.isClosed()) return page;
-  Logger.info("[cf-bypass] Launching browser");
-  if (browser) await browser.close().catch(() => undefined);
-  const { connect } = await import("puppeteer-real-browser");
-  ({ browser, page } = await connect({
-    headless: false,
-    turnstile: true,
-    disableXvfb: false,
-    ignoreAllFlags: false,
-  }));
-  return page;
-}
-
-function waitForClearance(tab: any): Promise<Solved> {
+function waitForClearance(page: Page): Promise<Solved> {
   return new Promise((resolve, reject) => {
     const poll = setInterval(async () => {
       try {
-        if (tab.isClosed()) return;
-        const title: string = await tab.evaluate(() => document.title).catch(() => "");
+        const title: string = await page.evaluate(() => document.title).catch(() => "");
         if (CHALLENGE_TITLES.some((marker) => title.includes(marker))) return;
 
-        const cookie = (await tab.cookies()).find((c: any) => c.name === "cf_clearance");
+        const cookie = (await page.cookies()).find((c) => c.name === "cf_clearance");
         if (!cookie) return;
-        const userAgent: string = await tab.evaluate(() => navigator.userAgent);
+        const userAgent: string = await page.evaluate(() => navigator.userAgent);
 
         clearInterval(poll);
         clearTimeout(timer);
@@ -67,23 +40,17 @@ function waitForClearance(tab: any): Promise<Solved> {
   });
 }
 
-async function solve(targetUrl: string): Promise<Clearance> {
+export async function getCloudflareClearance(targetUrl: string): Promise<Clearance> {
   try {
-    const tab = await ensurePage();
-    Logger.info(`[cf-bypass] Navigating to ${targetUrl}`);
-    await tab.goto(targetUrl, { waitUntil: "domcontentloaded" });
-    const clearance = await waitForClearance(tab);
-    Logger.info(`[cf-bypass] Obtained clearance, ttl ${clearance.ttl}s`);
+    const clearance = await withPage(async (page) => {
+      await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+      return waitForClearance(page);
+    });
+    Logger.info(`[cf-bypass] Cleared ${new URL(targetUrl).host}`);
     return { success: true, ...clearance };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    Logger.error(`[cf-bypass] ${error}`);
+    Logger.warn(`[cf-bypass] ${new URL(targetUrl).host}: ${error}`);
     return { success: false, error };
   }
-}
-
-export function getCloudflareClearance(targetUrl: string): Promise<Clearance> {
-  const run = queue.then(() => solve(targetUrl));
-  queue = run;
-  return run;
 }

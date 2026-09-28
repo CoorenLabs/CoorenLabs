@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { Elysia, t } from "elysia";
+import { browserFetch, type ImpersonatedResponse } from "./lib/impersonate";
 import { Logger } from "./logger";
 import { type ProxyHeaders, type ProxyKind, proxyUrl } from "./proxy";
 
@@ -23,14 +24,7 @@ const PLAYLIST_TAG = /^#EXT-X-(?:MEDIA|I-FRAME-STREAM-INF|RENDITION-REPORT)\b/;
 
 const query = t.Object({ url: t.String(), headers: t.Optional(t.String()) });
 
-type Upstream = {
-  ok: boolean;
-  status: number;
-  url: string;
-  headers: { get(name: string): string | null; has(name: string): boolean };
-  body: ReadableStream<Uint8Array> | null;
-  text(): Promise<string>;
-};
+type Upstream = ImpersonatedResponse;
 
 type RequestOptions = { headers: Headers; signal: AbortSignal; redirect: "manual" };
 
@@ -74,9 +68,7 @@ async function isAllowed(target: URL): Promise<boolean> {
 
 async function impersonate(url: string, init: RequestOptions): Promise<Upstream | null> {
   try {
-    const { fetch: browserFetch } = await import("wreq-js");
-    const res = await browserFetch(url, { ...init, headers: Object.fromEntries(init.headers) });
-    return res as unknown as Upstream;
+    return await browserFetch(url, init);
   } catch (err) {
     if (init.signal.aborted) throw err;
     Logger.debug(`[Proxy] Impersonated request failed for ${url}: ${(err as Error).message}`);
@@ -110,6 +102,63 @@ async function upstream(target: URL, headers: Headers, signal: AbortSignal): Pro
     void res.body?.cancel();
     target = new URL(location, target);
   }
+}
+
+const TS_PACKET = 188;
+const SYNC_PACKETS = 4;
+const MAX_PREFIX = 64 * 1024;
+
+function syncOffset(bytes: Uint8Array): number {
+  const span = TS_PACKET * (SYNC_PACKETS - 1);
+  for (let start = 0; start + span < bytes.length; start++) {
+    let aligned = true;
+    for (let packet = 0; aligned && packet < SYNC_PACKETS; packet++) {
+      aligned = bytes[start + packet * TS_PACKET] === 0x47;
+    }
+    if (aligned) return start;
+  }
+  return -1;
+}
+
+const IMAGE_SIGNATURES = ["\x89PNG", "\xFF\xD8\xFF", "GIF8", "RIFF", "BM"];
+
+function startsWithImage(bytes: Uint8Array): boolean {
+  return IMAGE_SIGNATURES.some((signature) =>
+    [...signature].every((char, index) => bytes[index] === char.charCodeAt(0)),
+  );
+}
+
+function unwrapSegment(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let head: Uint8Array | null = new Uint8Array(0);
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (head === null) {
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+        return;
+      }
+      let done = false;
+      const searching = () =>
+        head!.length < 8 || (startsWithImage(head!) && syncOffset(head!) === -1);
+      while (!done && head.length < MAX_PREFIX && searching()) {
+        const chunk = await reader.read();
+        done = chunk.done;
+        if (chunk.value) {
+          const merged: Uint8Array = new Uint8Array(head.length + chunk.value.length);
+          merged.set(head);
+          merged.set(chunk.value, head.length);
+          head = merged;
+        }
+      }
+      const offset = startsWithImage(head) ? syncOffset(head) : -1;
+      if (head.length) controller.enqueue(offset > 0 ? head.subarray(offset) : head);
+      head = null;
+      if (done) controller.close();
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
 }
 
 function parseHeaders(raw: string | undefined): ProxyHeaders | null {
@@ -205,10 +254,11 @@ async function forward(
 
   const type = res.headers.get("content-type");
   const disguised = kind === "segment" && /^(?:text\/html|image\/)/i.test(type ?? "");
+  const unwrap = disguised && res.status === 200 && res.body !== null;
   const out = new Headers({
     "content-type": type && !disguised ? type : FALLBACK_TYPE[kind],
   });
-  if (!res.headers.has("content-encoding")) {
+  if (!unwrap && !res.headers.has("content-encoding")) {
     for (const name of ["content-length", "content-range", "accept-ranges"]) {
       const value = res.headers.get(name);
       if (value) out.set(name, value);
@@ -217,7 +267,10 @@ async function forward(
   if (kind === "mp4") out.set("accept-ranges", "bytes");
   if (kind === "segment") out.set("cache-control", "public, max-age=86400");
 
-  return new Response(res.body, { status: res.status, headers: out });
+  return new Response(unwrap ? unwrapSegment(res.body!) : res.body, {
+    status: res.status,
+    headers: out,
+  });
 }
 
 export const proxyRoutes = new Elysia({ prefix: "/proxy" })

@@ -9,6 +9,7 @@ import { extractPrimevid } from "./extractors/primevid";
 import { extractStreamtape } from "./extractors/streamtape";
 import type { Extracted, Result, ServerSource, Source } from "./types";
 
+const LINK_INTERVAL = 1200;
 const FOUND_TTL = 3 * 3600;
 const MISSING_TTL = 10 * 60;
 
@@ -78,8 +79,9 @@ async function getSources(type: "movie" | "tv", query: string) {
     const { servers } = (await res.json()) as { servers?: Server[] };
 
     const jobs: Promise<ServerSource | undefined>[] = [];
-    for (const server of servers ?? []) {
-      if (!EXTRACTORS[server.name]) continue;
+    const supported = (servers ?? []).filter((server) => EXTRACTORS[server.name]);
+    for (const [index, server] of supported.entries()) {
+      if (index) await new Promise((resolve) => setTimeout(resolve, LINK_INTERVAL));
       const res = await fetcher(`${origin}/api/v1/l?key=${server.key}`, true, "primesrc", {
         headers,
       });

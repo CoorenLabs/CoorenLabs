@@ -1,4 +1,3 @@
-import { ANILIST_SPOTLIGHT_IDS } from "../../../../core/config";
 import {
   descriptionOf,
   fetchAniZip,
@@ -11,7 +10,7 @@ import {
 } from "../lib/helpers";
 import { HOME_QUERY } from "../lib/queries";
 
-const SPOTLIGHT_IDS = ANILIST_SPOTLIGHT_IDS.slice(0, 50);
+const SPOTLIGHT_SIZE = 10;
 
 const listItems = (page: any) =>
   (page?.media ?? []).map((media: any) => ({
@@ -23,35 +22,30 @@ const listItems = (page: any) =>
   }));
 
 export async function scrapeHome() {
-  const [data, aniZip] = await Promise.all([
-    queryAniList(HOME_QUERY, {
-      season: getSeason(),
-      seasonYear: new Date().getFullYear(),
-      spotlight: SPOTLIGHT_IDS,
-      withSpotlight: SPOTLIGHT_IDS.length > 0,
-    }),
-    Promise.all(SPOTLIGHT_IDS.map((id) => fetchAniZip(id))),
-  ]);
+  const data = await queryAniList(HOME_QUERY, {
+    season: getSeason(),
+    seasonYear: new Date().getFullYear(),
+  });
 
-  const byId = new Map<number, any>();
-  for (const media of data.spotlight?.media ?? []) byId.set(media.id, media);
+  const candidates: any[] = data.spotlight?.media ?? [];
+  const featured = [
+    ...candidates.filter((media) => media.bannerImage),
+    ...candidates.filter((media) => !media.bannerImage),
+  ].slice(0, SPOTLIGHT_SIZE);
+  const aniZip = await Promise.all(featured.map((media) => fetchAniZip(media.id)));
 
-  const spotlight = SPOTLIGHT_IDS.flatMap((id, index) => {
-    const media = byId.get(id);
-    if (!media) return [];
+  const spotlight = featured.map((media, index) => {
     const { timeLeft, episodeCount } = formatAiringInfo(media);
-    return [
-      {
-        id: media.id,
-        ...presentMedia(media, aniZip[index]),
-        description: descriptionOf(media),
-        season: formatSeason(media),
-        episode: episodeCount,
-        timeLeft,
-        status: formatStatus(media.status),
-        type: media.format || "TV",
-      },
-    ];
+    return {
+      id: media.id,
+      ...presentMedia(media, aniZip[index]),
+      description: descriptionOf(media),
+      season: formatSeason(media),
+      episode: episodeCount,
+      timeLeft,
+      status: formatStatus(media.status),
+      type: media.format || "TV",
+    };
   });
 
   return {

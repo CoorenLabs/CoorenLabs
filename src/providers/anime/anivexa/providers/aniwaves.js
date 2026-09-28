@@ -1,6 +1,6 @@
 import { getMedia } from "../core/anilist.js";
 import { memo, TTL } from "../core/cache.js";
-import { fetchText, HTML_ACCEPT, parseJson, upstreamError } from "../core/http.js";
+import { fetchText, HTML_ACCEPT, notFound, parseJson, upstreamError } from "../core/http.js";
 import {
   alignEpisodes,
   attr,
@@ -141,7 +141,7 @@ function resolveSeries(anilistId, ctx = {}) {
       titles,
       expectedCount(media, ctx.anizip),
     );
-    if (!selected) throw new Error(`AniWaves match not confident for AniList ${anilistId}`);
+    if (!selected) throw notFound(`AniWaves match not confident for AniList ${anilistId}`);
     return {
       siteId: selected.siteId,
       slug: selected.slug,

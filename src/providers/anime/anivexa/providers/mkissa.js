@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { withPage } from "../../../../core/lib/browser";
+import { Logger } from "../../../../core/logger";
 import { getAniZip, getMedia } from "../core/anilist.js";
 import { dedupe, keep, memo, recall, TTL } from "../core/cache.js";
 import { cookiesFrom, HTML_ACCEPT, notFound, request, wreqFetch } from "../core/http.js";
@@ -11,6 +13,11 @@ const REFERER = "https://mkissa.to";
 const API = "https://api.mkissa.net";
 const API_URL = `${API}/api`;
 const CAPTCHA_ENDPOINT = `${API}/captcha/turnstile`;
+const CAPTCHA_PROVIDER = "turnstile";
+const CAPTCHA_TIMEOUT_MS = 20000;
+const CAPTCHA_DEADLINE_MS = 45000;
+const CAPTCHA_BACKOFF_MS = 2 * TTL.minute;
+const RATE_LIMIT_WAIT_MS = 20000;
 const CONTENT_LANE = "k7";
 const REFERER_HOST = "mkissa.to";
 const KEY_GROUP = "mkissa";
@@ -112,6 +119,8 @@ const HEX_TABLE = {
 };
 
 let app = null;
+let episodeQueue = Promise.resolve();
+let captchaRetryAt = 0;
 const sessionCookies = new Map();
 
 function decodeHexUrl(hex) {
@@ -993,7 +1002,8 @@ async function apiPost(query, variables, options = {}) {
   if (json.errors?.length) {
     const messages = json.errors.map((e) => e.message || e.extensions?.code || "GraphQL error");
     const err = new Error(messages.join(" · "));
-    if (messages.includes("NEED_CAPTCHA")) err.code = "NEED_CAPTCHA";
+    if (messages.includes("NEED_CAPTCHA") || messages.includes("CAPTCHA_INVALID"))
+      err.code = "NEED_CAPTCHA";
     err.rawBody = raw;
     err.graphql = json;
     throw err;
@@ -1005,39 +1015,111 @@ function unwrap(data, key) {
   return data?.tobeparsed ? decryptTobeparsed(data.tobeparsed, key) : data;
 }
 
-async function apiEpisode(query, variables, { force = false, captcha = null, lane = null } = {}) {
-  const hash = sha256Hex(query);
-  const { key, epoch, buildId } = !force && lane ? lane : await getLaneKey(CONTENT_LANE, force);
-  const extensions = {
-    persistedQuery: { version: 1, sha256Hash: hash },
-    k: CONTENT_LANE,
-    aaReq: makeAaReq(key, epoch, buildId, hash, CONTENT_LANE),
-    ...(captcha ? { captcha } : {}),
-  };
-  const post = async () => unwrap(await apiPost(query, variables, { buildId, extensions }), key);
-  if (captcha) return post();
-  const url = `${API_URL}?variables=${encodeURIComponent(JSON.stringify(variables))}&extensions=${encodeURIComponent(JSON.stringify(extensions))}`;
+function captchaError(rawBody) {
+  return Object.assign(new Error("MKissa requested captcha"), { code: "NEED_CAPTCHA", rawBody });
+}
+
+function captchaFailure(reason, rawBody) {
+  captchaRetryAt = Date.now() + CAPTCHA_BACKOFF_MS;
+  Logger.warn(`[anivexa] mkissa captcha ${reason}`);
+  return captchaError(rawBody);
+}
+
+async function readCaptchaToken(page) {
+  await page.goto(CAPTCHA_ENDPOINT, {
+    referer: `${REFERER}/`,
+    waitUntil: "domcontentloaded",
+    timeout: FETCH_TIMEOUT_MS,
+  });
+  const solved = await page.waitForFunction(
+    () => globalThis.document.querySelector('.cf-turnstile [name="cf-turnstile-response"]')?.value,
+    { polling: 250, timeout: CAPTCHA_TIMEOUT_MS },
+  );
+  return solved.jsonValue();
+}
+
+async function solveCaptcha() {
+  const started = Date.now();
+  let timer;
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("timed out")), CAPTCHA_DEADLINE_MS);
+  });
+  const token = await Promise.race([withPage(readCaptchaToken), expired]).finally(() =>
+    clearTimeout(timer),
+  );
+  Logger.debug(`[anivexa] mkissa captcha solved in ${Date.now() - started}ms`);
+  return { token, provider: CAPTCHA_PROVIDER };
+}
+
+async function passCaptcha(post, rawBody) {
+  if (Date.now() < captchaRetryAt) throw captchaError(rawBody);
+  const captcha = await solveCaptcha().catch((error) => {
+    throw captchaFailure(`not solved: ${error.message}`, rawBody);
+  });
+  return post(captcha).catch((error) => {
+    throw error.code === "NEED_CAPTCHA" ? captchaFailure("rejected", error.rawBody) : error;
+  });
+}
+
+function retryDelay(message) {
+  const seconds = /too many requests\D*(\d+)\s*second/i.exec(message ?? "")?.[1];
+  return seconds === undefined ? 0 : Math.max(Number(seconds), 1) * 1000;
+}
+
+async function retryRateLimited(task) {
+  const deadline = Date.now() + RATE_LIMIT_WAIT_MS;
+  for (;;) {
+    try {
+      return await task();
+    } catch (error) {
+      const delay = retryDelay(error?.message);
+      if (!delay || Date.now() + delay > deadline) throw error;
+      Logger.debug(`[anivexa] mkissa rate limited, retrying in ${delay}ms`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+async function apiGet(url, buildId) {
   const res = await apiSessionFetch(url, { headers: apiHeaders(buildId) });
   const raw = await res.text();
   if (!res.ok) throw Object.assign(new Error(`API ${res.status}`), { rawBody: raw });
   const json = JSON.parse(raw);
   const messages = json.errors?.map((e) => e.message || e.extensions?.code).filter(Boolean) || [];
+  if (messages.some(retryDelay))
+    throw Object.assign(new Error(messages.join(" · ")), { rawBody: raw });
+  return { raw, json, messages };
+}
+
+async function apiEpisode(query, variables, { force = false, captcha = null, lane = null } = {}) {
+  const hash = sha256Hex(query);
+  const { key, epoch, buildId } = !force && lane ? lane : await getLaneKey(CONTENT_LANE, force);
+  const extensions = (solved) => ({
+    persistedQuery: { version: 1, sha256Hash: hash },
+    k: CONTENT_LANE,
+    aaReq: makeAaReq(key, epoch, buildId, hash, CONTENT_LANE),
+    ...(solved ? { captcha: solved } : {}),
+  });
+  const post = (solved = captcha) =>
+    retryRateLimited(async () =>
+      unwrap(await apiPost(query, variables, { buildId, extensions: extensions(solved) }), key),
+    );
+  if (captcha) return post();
+  const { raw, json, messages } = await retryRateLimited(() =>
+    apiGet(
+      `${API_URL}?variables=${encodeURIComponent(JSON.stringify(variables))}&extensions=${encodeURIComponent(JSON.stringify(extensions()))}`,
+      buildId,
+    ),
+  );
+  if (messages.includes("NEED_CAPTCHA")) return passCaptcha(post, raw);
   if (
     messages.includes("PersistedQueryNotFound") ||
     messages.some((message) => /Context creation failed/i.test(message))
   )
-    return post();
-  if (messages.includes("NEED_CAPTCHA")) {
-    try {
-      return await post();
-    } catch (error) {
+    return post().catch((error) => {
       if (error.code !== "NEED_CAPTCHA") throw error;
-      throw Object.assign(new Error("MKissa requested captcha"), {
-        code: "NEED_CAPTCHA",
-        rawBody: raw,
-      });
-    }
-  }
+      return passCaptcha(post, error.rawBody);
+    });
   if (messages.some((message) => /^AA_CRYPTO_/.test(message))) {
     if (!force) return apiEpisode(query, variables, { force: true });
     throw Object.assign(new Error(messages.join(" · ")), { rawBody: raw });
@@ -1059,17 +1141,20 @@ async function searchMkissa(query, mode = "sub") {
   return data?.shows?.edges ?? [];
 }
 
+function queued(task) {
+  const run = episodeQueue.then(task);
+  episodeQueue = run.catch(() => {});
+  return run;
+}
+
 async function getEpisodeSources(showId, epNum, audio, captcha, warm) {
   const [{ query }, lane] = await Promise.all([
     discoverApp(),
     getLaneKey(CONTENT_LANE),
     captcha ? null : warm(),
   ]);
-  const data = await apiEpisode(
-    query,
-    { showId, translationType: audio, episodeString: String(epNum) },
-    { captcha, lane },
-  );
+  const variables = { showId, translationType: audio, episodeString: String(epNum) };
+  const data = await queued(() => apiEpisode(query, variables, { captcha, lane }));
   return data?.episode ?? null;
 }
 

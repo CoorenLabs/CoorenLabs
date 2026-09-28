@@ -1,13 +1,12 @@
 import { Logger } from "../../../../core/logger";
-import { env } from "../../../../core/runtime";
 
 export const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 export const HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
 const TIMEOUT = 15_000;
-const WREQ_BROWSER = env.WREQ_BROWSER || "chrome_149";
-const WREQ_OS = env.WREQ_OS || "windows";
+const WREQ_BROWSER = "chrome_149";
+const WREQ_OS = "windows";
 const sessions = new Map();
 
 export function upstreamError(message, rawBody, status) {

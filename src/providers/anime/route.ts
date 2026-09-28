@@ -1,7 +1,6 @@
 import { Elysia } from "elysia";
 import { animepaheRoutes } from "./animepahe/route";
 import { toonstreamRoutes } from "./toonstream/route";
-import { animesaltRoutes } from "./animesalt/route";
 import { animelokAnimeRoutes } from "./animelok/route";
 import { miruroRoutes } from "./miruro/route";
 import { anivexaRoutes } from "./anivexa/route";
@@ -9,7 +8,6 @@ import { anivexaRoutes } from "./anivexa/route";
 export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(animepaheRoutes)
   .use(toonstreamRoutes)
-  .use(animesaltRoutes)
   .use(animelokAnimeRoutes)
   .use(miruroRoutes)
   .use(anivexaRoutes)
@@ -19,7 +17,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
     () => ({
       service: "anime",
       description: "Unified anime API — provider-isolated route architecture",
-      providers: ["animepahe", "toonstream", "animesalt", "animelok", "miruro", "anivexa"],
+      providers: ["animepahe", "toonstream", "animelok", "miruro", "anivexa"],
       endpoints: {
         animepahe: [
           "GET /anime/animepahe/search/:query         → Search titles",
@@ -37,15 +35,6 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/toonstream/series/:page?                  → Browse series",
           "GET /anime/toonstream/series/info/:slug              → Series details + episodes",
           "GET /anime/toonstream/episode/sources/:slug          → Episode stream sources (?season=&episode= or full episode slug)",
-        ],
-        animesalt: [
-          "GET /anime/animesalt/home                           → Latest episodes",
-          "GET /anime/animesalt/search/:query/:page?           → Search titles",
-          "GET /anime/animesalt/category/*[:page]              → Browse categories (?type=movies|series)",
-          "GET /anime/animesalt/movies/:page?                  → Browse movies",
-          "GET /anime/animesalt/movies/info/:slug              → Movie details + stream sources",
-          "GET /anime/animesalt/series/info/:slug              → Series details + episodes",
-          "GET /anime/animesalt/episode/stream/:slug           → Episode stream sources (NDJSON)",
         ],
         animelok: [
           "GET /anime/animelok/episodes/:anilistId?page={page}&pageSize={pageSize}    → Episode list",

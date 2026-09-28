@@ -4,6 +4,7 @@ import { balancedEnd } from "../core/utils.js";
 
 const encoder = new TextEncoder();
 const WASM_OFFSET = 1000;
+const PLAYLIST_KEY_LENGTH = 32;
 
 async function sha256hex(value) {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
@@ -114,9 +115,9 @@ function parseJsLiteral(source) {
   return value();
 }
 
-async function unwrapKeyMaterial(wasm, fragment, keyFragment, token, seed) {
+async function runWasm(wasm, fragment, keyFragment, token, seed) {
   const { instance } = await WebAssembly.instantiate(wasm, {});
-  const { memory, _s, _r } = instance.exports;
+  const { memory, _s, _r, _c } = instance.exports;
   if (!memory.buffer.byteLength) memory.grow(1);
   const length = fragment.length;
   const heap = new Uint8Array(memory.buffer);
@@ -126,7 +127,12 @@ async function unwrapKeyMaterial(wasm, fragment, keyFragment, token, seed) {
   _s(seed);
   _r(WASM_OFFSET, WASM_OFFSET + length, WASM_OFFSET + 2 * length, WASM_OFFSET + 3 * length, length);
   const output = WASM_OFFSET + 3 * length;
-  return new Uint8Array(memory.buffer).slice(output, output + length);
+  const pointer = typeof _c === "function" ? _c() : -1;
+  const view = new Uint8Array(memory.buffer);
+  return {
+    material: view.slice(output, output + length),
+    playlistKey: pointer >= 0 ? view.slice(pointer, pointer + PLAYLIST_KEY_LENGTH) : null,
+  };
 }
 
 export async function extractFlixcloud(embedHtml, { apiBase, headers = {}, referer } = {}) {
@@ -154,15 +160,16 @@ export async function extractFlixcloud(embedHtml, { apiBase, headers = {}, refer
   const video = bytes(tokenData[videoKey]);
   const tokenBytes = bytes(tokenData[tokenKey]);
   if (!video.length || !tokenBytes.length) throw new Error("Flixcloud token response incomplete");
+  const unwrapped = await runWasm(
+    wasm,
+    bytes(object[fields.keyField]),
+    bytes(keyFragment),
+    tokenBytes,
+    parseInt(seed.substring(0, 8), 16),
+  );
   const material = await crypto.subtle.importKey(
     "raw",
-    await unwrapKeyMaterial(
-      wasm,
-      bytes(object[fields.keyField]),
-      bytes(keyFragment),
-      tokenBytes,
-      parseInt(seed.substring(0, 8), 16),
-    ),
+    unwrapped.material,
     { name: "PBKDF2" },
     false,
     ["deriveBits"],
@@ -191,6 +198,8 @@ export async function extractFlixcloud(embedHtml, { apiBase, headers = {}, refer
   if (!url.startsWith("http")) throw new Error("Flixcloud decrypted an unexpected value");
   return {
     url,
+    playlistKey: unwrapped.playlistKey && Buffer.from(unwrapped.playlistKey).toString("base64url"),
+    audioTrack: Number.isInteger(data.default_audio_track) ? data.default_audio_track : 0,
     subtitles: data.subtitles ?? [],
     thumbnails_vtt: data.thumbnails_vtt ?? null,
     video_title: data.video_title ?? null,

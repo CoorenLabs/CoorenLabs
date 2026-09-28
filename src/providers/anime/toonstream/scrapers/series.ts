@@ -1,5 +1,5 @@
 import type { CheerioAPI } from "cheerio";
-import { asCdn } from "../../embeds/as-cdn";
+import { asCdn } from "../embeds/as-cdn";
 import {
   type Episode,
   load,

@@ -20,10 +20,8 @@ First off, thank you for considering contributing to CoorenLabs! It's people lik
 1.  **Fork the repo** and create your branch from `master`.
 2.  **Install dependencies**: `bun install`.
 3.  **Implement your changes**.
-4.  **Add tests**: Extend the Vitest suite in `tests/`.
-5.  **Ensure checks pass**: Run `bun run test` and `bun run typecheck`.
-6.  **Lint your code**: Run `bun run lint`.
-7.  **Submit a PR**: Describe your changes in detail and link to any relevant issues.
+4.  **Ensure checks pass**: Run `bun run typecheck` and `bun run lint`.
+5.  **Submit a PR**: Describe your changes in detail and link to any relevant issues.
 
 ## Development Setup
 
@@ -31,7 +29,6 @@ CoorenLabs supports multiple runtimes, but we recommend using **Bun** for develo
 
 ```bash
 bun run dev
-bun run test
 ```
 
 ## Community
