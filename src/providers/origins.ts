@@ -1,5 +1,7 @@
 export const animepahe = "https://animepahe.pw";
 export const toonstream = "https://toonstream.us";
+export const animesaturn = "https://www.animesaturn.cx";
+export const animeunity = "https://www.animeunity.so";
 export const animelok = "https://animelok.cc";
 
 export const primesrc = "https://primesrc.me";
@@ -11,6 +13,8 @@ export const allmanga = "https://allmanga.to";
 export const allmanga_api = "https://api.allanime.day/api";
 export const allmanga_reader = "https://mkissa.to";
 export const mangaball = "https://mangaball.com";
+export const flamecomics = "https://flamecomics.xyz";
+export const mangapill = "https://mangapill.com";
 
 export const tidal = "https://api.tidal.com/v1";
 
