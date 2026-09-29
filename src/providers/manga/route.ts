@@ -3,6 +3,8 @@ import { mangaballRoutes } from "./mangaball/route";
 import { allmangaRoutes } from "./allmanga/route";
 import { atsuRoutes } from "./atsu/route";
 import { mangafireRoutes } from "./mangafire/route";
+import { flamecomicsRoutes } from "./flamecomics/route";
+import { mangapillRoutes } from "./mangapill/route";
 
 export const mangaRoutes = new Elysia({ prefix: "/manga" })
   .get(
@@ -11,7 +13,7 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
       return {
         service: "manga",
         description: "Unified manga API — provider-isolated route architecture",
-        providers: ["mangaball", "allmanga", "atsu", "mangafire"],
+        providers: ["mangaball", "allmanga", "atsu", "mangafire", "flamecomics", "mangapill"],
         endpoints: {
           mangaball: [
             "GET /manga/mangaball/home          → Featured titles and banners",
@@ -95,6 +97,16 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
             "GET /manga/mangafire/read/:id      → Chapter images",
             "GET /manga/mangafire/volumes/:id   → Manga volumes (?lang=en)",
           ],
+          flamecomics: [
+            "GET /manga/flamecomics/search              → Search by keyword (?q=query)",
+            "GET /manga/flamecomics/detail/:id          → Series details & chapter list (with token per chapter)",
+            "GET /manga/flamecomics/read/:mangaId/:token → Chapter images (use mangaId + token from detail)",
+          ],
+          mangapill: [
+            "GET /manga/mangapill/search               → Search by keyword (?q=query)",
+            "GET /manga/mangapill/detail/:id           → Manga details & chapters list (with chapterId per chapter)",
+            "GET /manga/mangapill/read/:chapterId      → Chapter images (use chapterId from detail)",
+          ],
         },
       };
     },
@@ -108,4 +120,6 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
   .use(mangaballRoutes)
   .use(allmangaRoutes)
   .use(atsuRoutes)
-  .use(mangafireRoutes);
+  .use(mangafireRoutes)
+  .use(flamecomicsRoutes)
+  .use(mangapillRoutes);

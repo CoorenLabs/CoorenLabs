@@ -3,6 +3,8 @@ import { animekaiRoutes } from "./animekai/route";
 import { animepaheRoutes } from "./animepahe/route";
 import { toonstreamRoutes } from "./toonstream/route";
 import { animesaltRoutes } from "./animesalt/route";
+import { animesaturnRoutes } from "./animesaturn/route";
+import { animeunityRoutes } from "./animeunity/route";
 import { animelokAnimeRoutes } from "./animelok/route";
 import { miruroRoutes } from "./miruro/route";
 import { anivexaRoutes } from "./anivexa/route";
@@ -12,6 +14,8 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(animekaiRoutes)
   .use(toonstreamRoutes)
   .use(animesaltRoutes)
+  .use(animesaturnRoutes)
+  .use(animeunityRoutes)
   .use(animelokAnimeRoutes)
   .use(miruroRoutes)
   .use(anivexaRoutes)
@@ -22,6 +26,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
     () => ({
       service: "anime",
       description: "Unified anime API — provider-isolated route architecture",
+      providers: ["animepahe", "animekai", "toonstream", "animesalt", "animesaturn", "animeunity"],
       providers: ["animepahe", "animekai", "toonstream", "animesalt", "looker", "miruro", "anivexa"],
       endpoints: {
         animepahe: [
@@ -80,6 +85,15 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/animesalt/mp4-proxy?url=&headers=        → MP4 video proxy",
           "GET /anime/animesalt/fetch?url=&headers=            → Generic media fetch proxy",
         ],
+        animesaturn: [
+          "GET /anime/animesaturn/search/:query                → Search titles",
+          "GET /anime/animesaturn/info/:id                     → Full anime info + episodes",
+          "GET /anime/animesaturn/watch/*                      → Stream sources (pass the full episode ID from info)",
+        ],
+        animeunity: [
+          "GET /anime/animeunity/search/:query                 → Search titles",
+          "GET /anime/animeunity/info/:id                      → Full anime info + episodes",
+          "GET /anime/animeunity/watch/*                       → Stream sources (format: animeId/epId)",
         looker: [
           "GET /anime/animelok/episodes/:anilistId?title={title}&page={page}&lang={lang}&pageSize={pageSize}    → Episode list",
           "GET /anime/animelok/stream/:anilistId/:episode?title={title}&lang={lang}&quality={quality}           → Stream sources",
