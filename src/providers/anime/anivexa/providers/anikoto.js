@@ -218,10 +218,7 @@ function parseServers(html, audio) {
     const type = group[1];
     for (const item of group[2].matchAll(/<li\s+([^>]*data-link-id[^>]*)>([\s\S]*?)<\/li>/g)) {
       const linkId = item[1].match(/data-link-id="([^"]+)"/)?.[1];
-      const name = item[2]
-        .replace(/<[^>]+>/g, "")
-        .replace(/[<>]/g, "")
-        .trim();
+      const name = stripTags(item[2]).trim();
       if (!linkId) continue;
       if (type === "dl" || /download|kiwi/i.test(name)) downloads.push({ linkId, name });
       else if (type === audio || (audio === "sub" && type === "hsub"))
