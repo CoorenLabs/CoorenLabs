@@ -46,7 +46,10 @@ function failure(error) {
   if (error?.rawBody)
     Logger.debug(`[anivexa] ${error.message}: ${String(error.rawBody).slice(0, 500)}`);
   return json(
-    { error: error?.message ?? String(error), ...(error?.details ?? {}) },
+    {
+      error: error instanceof Error ? error.message : "Unexpected error",
+      ...(error?.details ?? {}),
+    },
     error?.status ?? 500,
   );
 }
