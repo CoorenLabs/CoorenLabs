@@ -22,12 +22,26 @@ const LAUNCH_ARGS = [
   "--disable-features=PictureInPicture,MediaSessionService,DocumentPictureInPictureAPI",
 ];
 
+const TEARDOWN_ERRORS = /Target closed|Session closed|main frame too early/i;
+
 let browser: Promise<Browser> | null = null;
 let active = 0;
+let guarded = false;
 const waiting: (() => void)[] = [];
+
+function ignoreTeardownErrors() {
+  if (guarded) return;
+  guarded = true;
+  process.on("unhandledRejection", (reason) => {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    if (!TEARDOWN_ERRORS.test(message)) throw reason;
+    Logger.debug(`[browser] Ignored page teardown error: ${message}`);
+  });
+}
 
 function getBrowser(): Promise<Browser> {
   if (browser) return browser;
+  ignoreTeardownErrors();
   Logger.info("[browser] Launching");
   const launching = import("puppeteer-real-browser")
     .then(({ connect }) =>
