@@ -12,6 +12,7 @@ import type { Extracted, Result, ServerSource, Source } from "./types";
 const LINK_INTERVAL = 1200;
 const FOUND_TTL = 3 * 3600;
 const MISSING_TTL = 10 * 60;
+const CHALLENGE = /challenge-platform|<title>just a moment/i;
 
 type Server = {
   name: string;
@@ -85,7 +86,7 @@ async function getSources(type: "movie" | "tv", query: string) {
       const res = await fetcher(`${origin}/api/v1/l?key=${server.key}`, true, "primesrc", {
         headers,
       });
-      if (res?.status === 403) {
+      if (res?.status === 403 && CHALLENGE.test(res.text)) {
         Logger.warn("[primesrc] link endpoint is challenged, skipping remaining servers");
         break;
       }

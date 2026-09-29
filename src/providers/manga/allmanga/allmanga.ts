@@ -77,6 +77,9 @@ async function gql(name: Query, variables: Record<string, unknown>) {
   if (messages?.includes("NEED_CAPTCHA")) {
     throw new HttpError(503, "AllManga requires captcha verification for this request");
   }
+  if (messages && /too many requests/i.test(messages)) {
+    throw new HttpError(503, "AllManga is rate limiting requests, try again shortly");
+  }
   if (messages) throw new HttpError(502, `AllManga API error: ${messages}`);
   return body.data ?? {};
 }
@@ -122,10 +125,13 @@ async function fetchTags(search: Record<string, unknown>, page = 1, limit?: numb
 }
 
 async function parsePopular(page = 1, size = 20, period = "daily") {
+  if (!Object.hasOwn(PERIODS, period)) {
+    throw new HttpError(400, "Query parameter 'period' must be one of daily, weekly, monthly, all");
+  }
   const { queryPopular } = await gql("popular", {
     type: "manga",
     size,
-    dateRange: PERIODS[period] ?? PERIODS.daily,
+    dateRange: PERIODS[period],
     page,
     allowAdult: false,
     allowUnknown: false,

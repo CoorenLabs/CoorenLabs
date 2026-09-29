@@ -32,9 +32,11 @@ function parseWatchPayload(payload: string): WatchProps | undefined {
   }
 }
 
-export async function scrapeEpisodes(anilistId: string): Promise<EpisodeList> {
-  const props = parseWatchPayload(await animelokFetch(`/watch/${anilistId}`, { RSC: "1" }));
-  const episodes = (props?.episodes ?? []).map((ep) => {
+export async function scrapeEpisodes(anilistId: string): Promise<EpisodeList | null> {
+  const payload = await animelokFetch(`/watch/${anilistId}`, { RSC: "1" });
+  const props = payload ? parseWatchPayload(payload) : undefined;
+  if (!props) return null;
+  const episodes = props.episodes.map((ep) => {
     const image = ep.image || undefined;
     return {
       number: ep.number,
@@ -46,5 +48,5 @@ export async function scrapeEpisodes(anilistId: string): Promise<EpisodeList> {
       img: image,
     };
   });
-  return { episodes, total: props?.totalEpisodes ?? episodes.length };
+  return { episodes, total: props.totalEpisodes ?? episodes.length };
 }

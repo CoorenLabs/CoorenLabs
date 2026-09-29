@@ -9,8 +9,13 @@ const HEADERS = {
   "sec-ch-ua-platform": '"Windows"',
 };
 
-export async function animelokFetch(path: string, headers?: Record<string, string>) {
+export async function animelokFetch(
+  path: string,
+  headers?: Record<string, string>,
+  missing: number[] = [],
+) {
   const res = await fetch(`${BASE_URL}${path}`, { headers: { ...HEADERS, ...headers } });
-  if (!res.ok) throw new Error(`animelok responded ${res.status} for ${path}`);
-  return res.text();
+  if (res.ok) return res.text();
+  if (missing.includes(res.status)) return null;
+  throw new Error(`animelok responded ${res.status} for ${path}`);
 }

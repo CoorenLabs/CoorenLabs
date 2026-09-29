@@ -13,8 +13,8 @@ function waitForClearance(page: Page): Promise<Solved> {
   return new Promise((resolve, reject) => {
     const poll = setInterval(async () => {
       try {
-        const title: string = await page.evaluate(() => document.title).catch(() => "");
-        if (CHALLENGE_TITLES.some((marker) => title.includes(marker))) return;
+        const title: string | null = await page.evaluate(() => document.title).catch(() => null);
+        if (title === null || CHALLENGE_TITLES.some((marker) => title.includes(marker))) return;
 
         const cookie = (await page.cookies()).find((c) => c.name === "cf_clearance");
         if (!cookie) return;

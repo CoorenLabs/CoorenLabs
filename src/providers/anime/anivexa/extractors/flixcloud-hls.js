@@ -4,7 +4,7 @@ import { proxyUrl } from "../../../../core/proxy";
 import { UA, upstreamError, withStatus } from "../core/http.js";
 
 const HEADERS = { Referer: "https://flixcloud.cc/" };
-const HOSTS = ["flixcloud.cc", "rundowncdn.top"];
+const HOSTS = ["flixcloud.cc", "rundowncdn.top", "stronghole.site"];
 const ROUTE = "/hls/flixcloud";
 const TIMEOUT = 90_000;
 const MAX_REDIRECTS = 3;

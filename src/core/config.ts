@@ -10,8 +10,6 @@ export const SERVER_ORIGIN = (env.SERVER_ORIGIN || `http://localhost:${PORT}`).r
 export const CORS_ORIGIN = env.CORS_ORIGIN || "*";
 export const CORS_CREDENTIALS = env.CORS_CREDENTIALS === "true";
 
-export const DATABASE_URL = env.DATABASE_URL;
-
 export function validateConfig() {
   if (PORT <= 0 || PORT > 65_535) throw new Error(`Invalid PORT: ${env.PORT}`);
   if (NODE_ENV === "production" && !env.SERVER_ORIGIN) {

@@ -1,6 +1,6 @@
 import { getMedia } from "../core/anilist.js";
 import { memo, TTL } from "../core/cache.js";
-import { fetchJson, fetchText, notFound, UA, withStatus } from "../core/http.js";
+import { fetchJson, fetchText, notFound, settle, UA, withStatus } from "../core/http.js";
 import { buildTitles, uniqueBy, watchId } from "../core/utils.js";
 import { extractFlixcloud } from "../extractors/flixcloud.js";
 import { flixcloudHlsUrl } from "../extractors/flixcloud-hls.js";
@@ -51,14 +51,15 @@ function identity(animeId, source, anilistId, matchType, matchScore, malId = nul
 function resolveSeries(anilistId, ctx = {}) {
   return memo(`series:reanime:${anilistId}`, TTL.identity, async () => {
     const media = ctx.media ?? (await getMedia(anilistId));
-    const results = await Promise.all(
+    const results = await settle(
       buildTitles(media, ctx.anizip)
         .slice(0, 5)
         .map((query) =>
-          api(`/api/v1/search?${new URLSearchParams({ q: query, limit: 10 })}`)
-            .then((data) => (Array.isArray(data?.results) ? data.results : []))
-            .catch(() => []),
+          api(`/api/v1/search?${new URLSearchParams({ q: query, limit: 10 })}`).then((data) =>
+            Array.isArray(data?.results) ? data.results : [],
+          ),
         ),
+      [],
     );
     const candidates = uniqueBy(
       results.flat().filter((result) => result?.anime_id),
@@ -68,14 +69,12 @@ function resolveSeries(anilistId, ctx = {}) {
       (result) => coverAnilistId(result.cover_image) === Number(anilistId),
     );
     if (byCover) return identity(byCover.anime_id, byCover, anilistId, "cover_image", 1);
-    const details = await Promise.all(
-      candidates
-        .filter((result) => coverAnilistId(result.cover_image) === null)
-        .map(async (result) => ({
-          result,
-          detail: await api(`/api/v1/anime/${result.anime_id}`).catch(() => null),
-        })),
+    const unmatched = candidates.filter((result) => coverAnilistId(result.cover_image) === null);
+    const fetched = await settle(
+      unmatched.map((result) => api(`/api/v1/anime/${result.anime_id}`)),
+      null,
     );
+    const details = fetched.map((detail, index) => ({ result: unmatched[index], detail }));
     const byAnilist = details.find(
       ({ detail }) => Number(detail?.anilist_id) === Number(anilistId),
     );
@@ -99,7 +98,7 @@ function resolveSeries(anilistId, ctx = {}) {
     const byMal =
       malId && details.find(({ detail }) => detail?.mal_id && Number(detail.mal_id) === malId);
     if (byMal) return identity(byMal.result.anime_id, byMal.detail, anilistId, "mal", 0.9, malId);
-    throw new Error(`No confirmed reanime match for AniList ${anilistId}`);
+    throw notFound(`No confirmed reanime match for AniList ${anilistId}`);
   });
 }
 

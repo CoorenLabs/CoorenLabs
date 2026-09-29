@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { withPage } from "../../../../core/lib/browser";
 import { Logger } from "../../../../core/logger";
-import { getAniZip, getMedia } from "../core/anilist.js";
+import { getAniZip, mediaOrNull } from "../core/anilist.js";
 import { dedupe, keep, memo, recall, TTL } from "../core/cache.js";
 import { cookiesFrom, HTML_ACCEPT, notFound, request, wreqFetch } from "../core/http.js";
 import { balancedEnd, uniqueBy, watchId } from "../core/utils.js";
@@ -1154,7 +1154,11 @@ async function getEpisodeSources(showId, epNum, audio, captcha, warm) {
     captcha ? null : warm(),
   ]);
   const variables = { showId, translationType: audio, episodeString: String(epNum) };
-  const data = await queued(() => apiEpisode(query, variables, { captcha, lane }));
+  const load = () => apiEpisode(query, variables, { captcha, lane });
+  const data = await queued(load).catch((error) => {
+    if (/^No episode\b/i.test(error.message)) return null;
+    throw error;
+  });
   return data?.episode ?? null;
 }
 
@@ -1228,7 +1232,7 @@ function findBestMatch(results, titles, targetYear, targetId) {
 async function resolveMkissaId(anilistId, ctx = {}) {
   const [anizipData, media] = await Promise.all([
     ctx.anizip ?? getAniZip(anilistId),
-    ctx.media ?? getMedia(anilistId).catch(() => null),
+    ctx.media ?? mediaOrNull(anilistId),
   ]);
   const anizip = anizipData || {};
   let titles = anizip.titles
@@ -1253,12 +1257,12 @@ async function resolveMkissaId(anilistId, ctx = {}) {
         .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
         .join(" "),
     ];
-  if (!titles.length) throw new Error(`Could not resolve titles for AniList ID: ${anilistId}`);
+  if (!titles.length) throw notFound(`Could not resolve titles for AniList ID: ${anilistId}`);
   const results = uniqueBy(
     (await Promise.all(titles.slice(0, 3).map((title) => searchMkissa(title, "sub")))).flat(),
     (result) => result._id,
   );
-  if (!results.length) throw new Error(`No MKissa match for "${titles[0]}"`);
+  if (!results.length) throw notFound(`No MKissa match for "${titles[0]}"`);
   const match = findBestMatch(
     results,
     titles,
@@ -1401,6 +1405,7 @@ async function extractSource(src) {
   if (url && /^https?:\/\/allanime\.day\/apivtwo\/clock(?:\.json)?/i.test(url))
     url = url.replace("/clock?", "/clock.json?");
   let extractedUrl = null;
+  let referer = REFERER;
   try {
     const host = new URL(url).hostname.replace(/^www\./, "");
     if (host === "allanime.day" && /\/apivtwo\/clock(?:\.json)?/i.test(new URL(url).pathname)) {
@@ -1409,8 +1414,10 @@ async function extractSource(src) {
     else if (host === "mp4upload.com") {
       const m = url.match(/embed-([a-zA-Z0-9]+)\.html/i);
       if (m?.[1]) extractedUrl = await extractMp4(m[1]);
+      referer = "https://www.mp4upload.com/";
     } else if (/uns\.bio$/i.test(host)) {
       extractedUrl = await extractUns(url);
+      referer = `${new URL(url).origin}/`;
     } else if (host === "ok.ru") {
       const m = url.match(/\/(?:videoembed\/)?(\d+)(?:[/?#]|$)/i);
       if (m?.[1]) extractedUrl = await extractOk(m[1]);
@@ -1430,7 +1437,7 @@ async function extractSource(src) {
     type: src.type,
     priority: src.priority,
     headers: {
-      Referer: REFERER,
+      Referer: extractedUrl ? referer : REFERER,
       "User-Agent": UA4,
     },
     downloads: src.downloads || null,
@@ -1585,7 +1592,8 @@ export async function watch(anilistId, audio, episode, { url, request, basePath 
     const needsCaptcha = error.code === "NEED_CAPTCHA";
     if (needsCaptcha && cached) return cached;
     const path = `${basePath}/watch/mkissa/${anilistId}/${audio}/mkissa-${episode}`;
-    throw Object.assign(error, {
+    throw Object.assign(new Error(error.message), {
+      rawBody: error.rawBody,
       status: needsCaptcha ? 403 : error.status,
       details: {
         code: error.code ?? null,

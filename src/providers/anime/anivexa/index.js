@@ -8,6 +8,7 @@ import { stream as dhiveStream } from "./providers/2dhive.js";
 import { PROVIDER_NAMES, PROVIDERS, resolveProviders, watchTtl } from "./providers/index.js";
 import { captchaPage } from "./providers/mkissa.js";
 import { stream as reanimeStream } from "./providers/reanime.js";
+import { playlist as senshiPlaylist } from "./providers/senshi.js";
 
 export { PROVIDER_NAMES };
 
@@ -115,6 +116,7 @@ const ROUTE_HANDLERS = [
     /^\/hls\/flixcloud\/(playlist\.m3u8|segment\.ts)$/,
     ([, file], context) => flixcloudHls(file, context),
   ],
+  [/^\/hls\/senshi\/playlist\.m3u8$/, (_, context) => senshiPlaylist(context)],
   [
     /^\/stream\/2dhive\/(\d+)\/(sub|dub)\/(\d+)\/?$/,
     async ([, id, audio, episode]) => redirect(await dhiveStream(id, audio, Number(episode))),

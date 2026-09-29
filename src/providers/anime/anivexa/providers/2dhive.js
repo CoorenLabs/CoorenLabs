@@ -11,7 +11,7 @@ const LABEL = "2dhive";
 
 async function malIdFor(anilistId, ctx) {
   const idMal = (ctx?.media ?? (await getMedia(anilistId)))?.idMal;
-  if (!idMal) throw new Error(`2dhive: no MAL ID found for AniList ${anilistId}`);
+  if (!idMal) throw notFound(`2dhive: no MAL ID found for AniList ${anilistId}`);
   return idMal;
 }
 

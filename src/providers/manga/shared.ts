@@ -26,7 +26,7 @@ export class HttpError extends Error {
   }
 }
 
-async function request(label: string, url: string, init: RequestInit = {}) {
+async function request(label: string, url: string, init: RequestInit = {}, rejectsInput = false) {
   let res: Response;
   try {
     res = await fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(TIMEOUT) });
@@ -39,11 +39,20 @@ async function request(label: string, url: string, init: RequestInit = {}) {
   void res.body?.cancel();
   Logger.warn(`[${label}] ${res.status} from ${url}`);
   if (res.status === 404) throw new HttpError(404, `Not found on ${label}`);
+  if (res.status === 400 && rejectsInput)
+    throw new HttpError(400, `${label} rejected the request parameters`);
+  if (res.status === 429)
+    throw new HttpError(503, `${label} is rate limiting requests, try again shortly`);
   throw new HttpError(502, `${label} responded with HTTP ${res.status}`);
 }
 
-export async function getJson<T = any>(label: string, url: string, init?: RequestInit): Promise<T> {
-  const res = await request(label, url, init);
+export async function getJson<T = any>(
+  label: string,
+  url: string,
+  init?: RequestInit,
+  rejectsInput = false,
+): Promise<T> {
+  const res = await request(label, url, init, rejectsInput);
   try {
     return (await res.json()) as T;
   } catch {

@@ -1,10 +1,9 @@
 import { Cache } from "../../../core/cache";
 import { Logger } from "../../../core/logger";
 import { type ProxyHeaders, proxyUrl } from "../../../core/proxy";
-import { remapManager } from "../../../core/remapManager";
 import { extractAniZipImages, fetchWithRetry } from "../../meta/anilist/lib/helpers";
 import { miruro as MIRURO_URL } from "../../origins";
-import { MEDIA_FULL_FIELDS, MEDIA_LIST_FIELDS, applyRemapsToMedia, decodeCatalog } from "./utils";
+import { MEDIA_FULL_FIELDS, MEDIA_LIST_FIELDS, decodeCatalog } from "./utils";
 
 const ANILIST_URL = "https://graphql.anilist.co";
 const CATALOG_URL = `${MIRURO_URL}/api/v1`;
@@ -24,6 +23,12 @@ const SORTS = new Set([
   "FAVOURITES_DESC",
   "UPDATED_AT_DESC",
 ]);
+
+const ENUMS: Record<string, [string, string[]]> = {
+  season: ["MediaSeason", ["WINTER", "SPRING", "SUMMER", "FALL"]],
+  format: ["MediaFormat", ["TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC"]],
+  status: ["MediaStatus", ["FINISHED", "RELEASING", "NOT_YET_RELEASED", "CANCELLED", "HIATUS"]],
+};
 
 type CatalogEntry = { id: string; format: string | null };
 
@@ -62,7 +67,7 @@ const aniZip = (anilistId: string | number) =>
     .catch(() => null);
 
 function withArtwork(media: any, mappings: unknown) {
-  const { banner, logo } = extractAniZipImages(mappings, remapManager.getRemap(media.id));
+  const { banner, logo } = extractAniZipImages(mappings);
   media.bannerImage = banner || media.bannerImage;
   media.logo = logo || media.logo;
   return media;
@@ -124,6 +129,15 @@ async function catalog<T>(path: string): Promise<T> {
   }
 }
 
+export function invalidFilter(params: Record<string, string | undefined>) {
+  for (const [name, [, values]] of Object.entries(ENUMS)) {
+    const value = params[name]?.toUpperCase();
+    if (value && !values.includes(value))
+      return `Invalid ${name}; expected one of ${values.join(", ")}`;
+  }
+  return null;
+}
+
 export class Miruro {
   private static async anilistQuery(query: string, variables?: Record<string, unknown>) {
     const res = await fetch(ANILIST_URL, {
@@ -165,7 +179,7 @@ export class Miruro {
       );
       return {
         ...paged(data.Page?.pageInfo, page, perPage),
-        results: (data.Page?.media || []).map(applyRemapsToMedia),
+        results: data.Page?.media || [],
       };
     } catch (err) {
       Logger.error(`[Miruro] search failed: ${String(err)}`);
@@ -192,7 +206,7 @@ export class Miruro {
         { search: query },
       );
       return {
-        suggestions: (data.Page?.media || []).map(applyRemapsToMedia).map((item: any) => ({
+        suggestions: (data.Page?.media || []).map((item: any) => ({
           id: item.id,
           title: item.title?.english || item.title?.romaji,
           title_romaji: item.title?.romaji,
@@ -227,9 +241,10 @@ export class Miruro {
       if (params.genre) add("genre", "String", params.genre);
       if (params.tag) add("tag", "String", params.tag);
       if (params.year) add("seasonYear", "Int", Number(params.year));
-      if (params.season) add("season", "MediaSeason", params.season.toUpperCase());
-      if (params.format) add("format", "MediaFormat", params.format.toUpperCase());
-      if (params.status) add("status", "MediaStatus", params.status.toUpperCase());
+      for (const [name, [type, values]] of Object.entries(ENUMS)) {
+        const value = params[name]?.toUpperCase();
+        if (value && values.includes(value)) add(name, type, value);
+      }
 
       const data = await this.anilistQuery(
         `query (${types.join(", ")}) {
@@ -244,7 +259,7 @@ export class Miruro {
       );
       return {
         ...paged(data.Page?.pageInfo, variables.page as number, variables.perPage as number),
-        results: (data.Page?.media || []).map(applyRemapsToMedia),
+        results: data.Page?.media || [],
       };
     } catch (err) {
       Logger.error(`[Miruro] filter failed: ${String(err)}`);
@@ -274,7 +289,7 @@ export class Miruro {
       );
       return {
         ...paged(data.Page?.pageInfo, page, perPage),
-        results: (data.Page?.media || []).map(applyRemapsToMedia),
+        results: data.Page?.media || [],
       };
     } catch (err) {
       Logger.error(`[Miruro] ${sort} collection failed: ${String(err)}`);
@@ -312,7 +327,7 @@ export class Miruro {
       );
       const results = await Promise.all(
         (data.Page?.media || []).map(async (media: any) =>
-          withArtwork(applyRemapsToMedia(media), await aniZip(media.id)),
+          withArtwork(media, await aniZip(media.id)),
         ),
       );
       return { results };
@@ -343,7 +358,7 @@ export class Miruro {
       return {
         ...paged(data.Page?.pageInfo, page, perPage),
         results: (data.Page?.airingSchedules || []).map((item: any) => ({
-          ...(item.media ? applyRemapsToMedia(item.media) : {}),
+          ...item.media,
           next_episode: item.episode,
           airingAt: item.airingAt,
           timeUntilAiring: item.timeUntilAiring,
@@ -368,7 +383,7 @@ export class Miruro {
         ),
         aniZip(anilistId),
       ]);
-      return data.Media ? withArtwork(applyRemapsToMedia(data.Media), mappings) : null;
+      return data.Media ? withArtwork(data.Media, mappings) : null;
     } catch (err) {
       Logger.error(`[Miruro] info failed for ${anilistId}: ${String(err)}`);
       return null;
@@ -455,10 +470,7 @@ export class Miruro {
       return {
         id: data.Media.id,
         title: data.Media.title,
-        relations: (data.Media.relations?.edges || []).map((edge: any) => {
-          applyRemapsToMedia(edge.node);
-          return edge;
-        }),
+        relations: data.Media.relations?.edges || [],
       };
     } catch (err) {
       Logger.error(`[Miruro] relations failed for ${anilistId}: ${String(err)}`);
@@ -500,10 +512,7 @@ export class Miruro {
       const recommendations = data.Media?.recommendations;
       return {
         ...paged(recommendations?.pageInfo, page, perPage),
-        recommendations: (recommendations?.nodes || []).map((node: any) => {
-          applyRemapsToMedia(node.mediaRecommendation);
-          return node;
-        }),
+        recommendations: recommendations?.nodes || [],
       };
     } catch (err) {
       Logger.error(`[Miruro] recommendations failed for ${anilistId}: ${String(err)}`);

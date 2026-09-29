@@ -1,6 +1,4 @@
 import eslint from "@eslint/js";
-import eslintConfigPrettier from "eslint-config-prettier";
-import prettier from "eslint-plugin-prettier";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
@@ -10,9 +8,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     languageOptions: { globals: globals.node },
-    plugins: { prettier },
     rules: {
-      "prettier/prettier": "error",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": [
         "warn",
@@ -21,5 +17,4 @@ export default tseslint.config(
       "no-empty": ["warn", { allowEmptyCatch: true }],
     },
   },
-  eslintConfigPrettier,
 );

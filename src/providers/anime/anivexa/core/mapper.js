@@ -1,4 +1,4 @@
-import { anilistQuery, fetchArm, getMedia } from "./anilist.js";
+import { anilistQuery, fetchArm, mediaOrNull } from "./anilist.js";
 
 const NODE = "id type format title{romaji english native}";
 const RELATIONS_QUERY = `query($id:Int){Media(id:$id,type:ANIME){id synonyms relations{edges{relationType(version:2) node{${NODE} relations{edges{relationType(version:2) node{${NODE}}}}}}}}}`;
@@ -23,7 +23,7 @@ export async function mapAnimeIds(anilistId) {
   const id = Number(anilistId);
   const [arm, media, relations] = await Promise.all([
     fetchArm(id),
-    getMedia(id).catch(() => null),
+    mediaOrNull(id),
     anilistQuery(RELATIONS_QUERY, { id })
       .then((data) => data?.Media ?? null)
       .catch(() => null),

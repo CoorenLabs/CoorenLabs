@@ -1,5 +1,5 @@
 import { getMedia } from "../core/anilist.js";
-import { fetchJson } from "../core/http.js";
+import { fetchJson, notFound } from "../core/http.js";
 import {
   decodeEntities,
   fetchHtml,
@@ -120,11 +120,10 @@ export async function getEpisodes(anilistId, ctx = {}) {
 export async function watch(anilistId, audio, episode) {
   const { series, episodes } = await resolveSeries(anilistId, {});
   const sourceNumber = providerEpisode(series, episode);
-  const list = (episodes ?? (await scrapeSeries(series.slug))).filter(
-    (item) => item.number === sourceNumber,
+  const target = (episodes ?? (await scrapeSeries(series.slug))).find(
+    (item) => item.number === sourceNumber && (audio === "dub" ? item.hasDub : item.hasSub),
   );
-  const target = list.find((item) => (audio === "dub" ? item.hasDub : item.hasSub)) ?? list[0];
-  if (!target) throw new Error(`animenosub episode ${sourceNumber} not found`);
+  if (!target) throw notFound(`animenosub ${audio} episode ${sourceNumber} not found`);
   const embeds = await scrapeEmbeds(target.epUrl);
   const resolved = await Promise.all(
     embeds.map((embed) =>

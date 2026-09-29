@@ -12,25 +12,32 @@ const prefix = "/anime/animelok";
 async function respond<T, R>(
   key: string,
   ttl: number,
-  load: () => Promise<T>,
+  set: { status?: number | string },
+  load: () => Promise<T | null>,
   cacheable: (data: T) => boolean,
   present: (data: T) => R,
 ) {
   const started = performance.now();
   try {
-    let fresh: T | undefined;
+    let fresh: T | null = null;
     const { data, cached } = await Cache.remember(key, ttl, async () => {
       fresh = await load();
-      return cacheable(fresh) ? fresh : null;
+      return fresh && cacheable(fresh) ? fresh : null;
     });
+    const result = (data ?? fresh) as T | null;
+    if (!result) {
+      set.status = 404;
+      return { success: false, error: "Not found on animelok" };
+    }
     return {
       success: true,
       served_cache: cached,
       took_ms: (performance.now() - started).toFixed(2),
-      data: present((data ?? fresh) as T),
+      data: present(result),
     };
   } catch (err) {
     Logger.error(`[animelok] ${key}: ${String(err)}`);
+    set.status = 502;
     return { success: false, error: (err as Error).message };
   }
 }
@@ -49,12 +56,13 @@ export const animelokAnimeRoutes = new Elysia({ prefix: "/animelok" })
 
   .get(
     "/episodes/:anilistId",
-    ({ params: { anilistId }, query }) => {
+    ({ params: { anilistId }, query, set }) => {
       const page = Math.max(Math.floor(Number(query.page)) || 0, 0);
       const size = Math.max(Math.floor(Number(query.pageSize)) || 30, 1);
       return respond(
         `animelok:episodes:${anilistId}`,
         EPISODES_CACHE_TTL,
+        set,
         () => scrapeEpisodes(anilistId),
         (list) => list.episodes.length > 0,
         (list) => ({
@@ -80,10 +88,11 @@ export const animelokAnimeRoutes = new Elysia({ prefix: "/animelok" })
 
   .get(
     "/stream/:anilistId/:episode",
-    ({ params: { anilistId, episode }, query }) =>
+    ({ params: { anilistId, episode }, query, set }) =>
       respond(
         `animelok:stream:${anilistId}:${episode}`,
         STREAM_CACHE_TTL,
+        set,
         () => scrapeStream(anilistId, episode),
         ({ sub, dub }) => sub.embeds.length > 0 || dub.embeds.length > 0,
         (tracks) => ({

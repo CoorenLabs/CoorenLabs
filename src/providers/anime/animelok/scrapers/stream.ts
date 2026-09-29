@@ -37,8 +37,15 @@ function buildTrack(servers: UpstreamServer[], track: Track): LangTrack {
   return { hash, servers: [], embeds, best: embeds[0]?.url ?? null };
 }
 
-export async function scrapeStream(anilistId: string, episode: string): Promise<StreamTracks> {
-  const { servers } = JSON.parse(await animelokFetch(`/api/anilist/${anilistId}/${episode}`));
+export async function scrapeStream(
+  anilistId: string,
+  episode: string,
+): Promise<StreamTracks | null> {
+  const payload = await animelokFetch(`/api/anilist/${anilistId}/${episode}`, undefined, [
+    404, 502,
+  ]);
+  if (!payload) return null;
+  const { servers } = JSON.parse(payload);
   const list: UpstreamServer[] = Array.isArray(servers) ? servers : [];
   return { sub: buildTrack(list, "sub"), dub: buildTrack(list, "dub") };
 }

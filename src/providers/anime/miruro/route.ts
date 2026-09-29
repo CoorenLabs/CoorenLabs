@@ -1,5 +1,5 @@
 import { Elysia, t } from "elysia";
-import { Miruro } from "./miruro";
+import { invalidFilter, Miruro } from "./miruro";
 
 type Query = Record<string, string | undefined>;
 
@@ -96,9 +96,16 @@ export const miruroRoutes = new Elysia({ prefix: "/miruro" })
     },
   )
 
-  .get("/filter", ({ query, set }) => orFail(Miruro.filter(query), set, 500, "Filter failed"), {
-    detail: detail("Filter", "Advanced filter / browse. Combine any filters."),
-  })
+  .get(
+    "/filter",
+    ({ query, set }) => {
+      const invalid = invalidFilter(query);
+      if (!invalid) return orFail(Miruro.filter(query), set, 500, "Filter failed");
+      set.status = 400;
+      return { message: invalid };
+    },
+    { detail: detail("Filter", "Advanced filter / browse. Combine any filters.") },
+  )
 
   .get(
     "/spotlight",

@@ -42,7 +42,7 @@ const FEEDS: [path: string, summary: string, load: (query: Query) => Promise<unk
   [
     "/popular",
     "Get Most Viewed Manga",
-    (query) => mangaball.search({ sort: "views", limit: limit(query, 24) }),
+    (query) => mangaball.search({ sort: "views", page: page(query), limit: limit(query, 24) }),
   ],
   ["/origin", "Get Manga by Origin", (query) => mangaball.byOrigin(query.origin)],
   ["/filters", "Advanced Manga Search Filters", (query) => mangaball.filters(query)],

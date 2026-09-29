@@ -1,7 +1,7 @@
 import cors from "@elysiajs/cors";
 import openapi from "@elysiajs/openapi";
 import { Elysia } from "elysia";
-import { CORS_CREDENTIALS, CORS_ORIGIN, NODE_ENV } from "./core/config";
+import { CORS_CREDENTIALS, CORS_ORIGIN, NODE_ENV, validateConfig } from "./core/config";
 import { mappingRoutes } from "./core/mappingRoutes";
 import { proxyRoutes } from "./core/proxyRoutes";
 import { isNode } from "./core/runtime";
@@ -29,43 +29,45 @@ const documentation = openapi({
   },
 });
 
-export async function createApp() {
-  const adapter = isNode ? (await import("@elysiajs/node")).node() : undefined;
+validateConfig();
 
-  return new Elysia({ adapter, serve: { idleTimeout: 120 } })
-    .use(
-      cors({
-        origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN.split(","),
-        credentials: CORS_CREDENTIALS,
-      }),
-    )
-    .onRequest(({ request }) => {
-      const url = new URL(request.url);
-      if (url.pathname.includes("//")) {
-        url.pathname = url.pathname.replace(/\/{2,}/g, "/");
-        return Response.redirect(url.href, 301);
-      }
-    })
-    .use(documentation)
-    .get(
-      "/",
-      () => ({
-        name: "Cooren API",
-        version: VERSION,
-        repo: "https://github.com/CoorenLabs/CoorenLabs.git",
-        environment: NODE_ENV,
-        about:
-          "Cooren is a high-performance, scalable scraping engine designed to collect, organize, and deliver structured data from across the world of anime, movies, manga, and music, all in one unified ecosystem",
-        status: "operational",
-      }),
-      { detail: { tags: ["core"], summary: "System Status & API Overview" } },
-    )
-    .use(movieTvRoutes)
-    .use(animeRoutes)
-    .use(mangaRoutes)
-    .use(musicRoutes)
-    .use(streamRoutes)
-    .use(metaRoutes)
-    .use(proxyRoutes)
-    .use(mappingRoutes);
-}
+const adapter = isNode ? (await import("@elysiajs/node")).node() : undefined;
+
+const app = new Elysia({ adapter, serve: { idleTimeout: 120 } })
+  .use(
+    cors({
+      origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN.split(","),
+      credentials: CORS_CREDENTIALS,
+    }),
+  )
+  .onRequest(({ request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.includes("//")) {
+      url.pathname = url.pathname.replace(/\/{2,}/g, "/");
+      return Response.redirect(url.href, 301);
+    }
+  })
+  .use(documentation)
+  .get(
+    "/",
+    () => ({
+      name: "Cooren API",
+      version: VERSION,
+      repo: "https://github.com/CoorenLabs/CoorenLabs.git",
+      environment: NODE_ENV,
+      about:
+        "Cooren is a high-performance, scalable scraping engine designed to collect, organize, and deliver structured data from across the world of anime, movies, manga, and music, all in one unified ecosystem",
+      status: "operational",
+    }),
+    { detail: { tags: ["core"], summary: "System Status & API Overview" } },
+  )
+  .use(movieTvRoutes)
+  .use(animeRoutes)
+  .use(mangaRoutes)
+  .use(musicRoutes)
+  .use(streamRoutes)
+  .use(metaRoutes)
+  .use(proxyRoutes)
+  .use(mappingRoutes);
+
+export default app;

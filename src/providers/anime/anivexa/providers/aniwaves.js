@@ -259,7 +259,7 @@ export async function watch(anilistId, audio, episode) {
   const { series, episodes } = await seriesEpisodes(anilistId, {});
   const target = episodes.find((item) => item.number === episode);
   if (!target || !(audio === "dub" ? target.hasDub : target.hasSub))
-    throw new Error(`AniWaves ${audio} episode ${episode} not found`);
+    throw notFound(`AniWaves ${audio} episode ${episode} not found`);
   const referer = `${BASE}/watch/${series.slug}/ep-${target.sourceNumber}`;
   const servers = serverGroups(
     String(
@@ -269,7 +269,7 @@ export async function watch(anilistId, audio, episode) {
       )) || "",
     ),
   ).filter((server) => server.audio === audio);
-  if (!servers.length) throw new Error(`AniWaves has no ${audio} servers for episode ${episode}`);
+  if (!servers.length) throw notFound(`AniWaves has no ${audio} servers for episode ${episode}`);
   const resolved = await Promise.all(
     servers.map(async (server) => {
       try {

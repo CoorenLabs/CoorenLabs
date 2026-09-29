@@ -91,10 +91,11 @@ export function parseDetails($: CheerioAPI) {
   if (!title) return null;
 
   const meta = article.find(".entry-meta");
-  const paragraphs = article.find(".description p");
+  const description = article.find(".description");
+  const paragraphs = description.find("p");
   const field = (label: string) =>
     paragraphs
-      .filter((_, p) => $(p).text().includes(label))
+      .filter((_, p) => $(p).children("span").first().text().trim() === label)
       .first()
       .text()
       .replace(label, "")
@@ -117,7 +118,13 @@ export function parseDetails($: CheerioAPI) {
     title,
     year: meta.find(".year").text().trim(),
     tmdbRating: Number(article.find(".vote-cn .num").text().trim()),
-    description: paragraphs.not(":has(span)").first().text().trim(),
+    description:
+      paragraphs.not(":has(span)").first().text().trim() ||
+      description
+        .contents()
+        .filter((_, node) => node.type === "text")
+        .text()
+        .trim(),
     languages: split(field("Language:"), "–"),
     qualities: split(field("Quality:"), "|"),
     duration: meta.find(".duration").text().trim(),

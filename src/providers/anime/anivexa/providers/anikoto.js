@@ -1,6 +1,6 @@
 import { getMedia } from "../core/anilist.js";
 import { memo, TTL } from "../core/cache.js";
-import { fetchJson, fetchText, notFound, UA } from "../core/http.js";
+import { fetchJson, fetchText, notFound, settle, UA } from "../core/http.js";
 import { attr, originOf, stripTags, uniqueBy, watchId } from "../core/utils.js";
 import { extractMegaPlay } from "../extractors/megaplay.js";
 
@@ -92,10 +92,12 @@ function resolveShow(anilistId, media) {
     const romaji = media.title?.romaji;
     const synonyms = media.synonyms || [];
     const keywords = [...new Set([english, romaji, ...synonyms].filter(Boolean))].slice(0, 5);
-    const results = await Promise.all(keywords.map((keyword) => search(keyword).catch(() => [])));
+    const results = await settle(
+      keywords.map((keyword) => search(keyword)),
+      [],
+    );
     const candidates = uniqueBy(results.flat(), (candidate) => candidate.slug);
-    if (!candidates.length)
-      throw new Error(`No results found on Anikoto for: ${english || romaji}`);
+    if (!candidates.length) throw notFound(`No results found on Anikoto for: ${english || romaji}`);
     const chosen = candidates
       .map((candidate) => ({
         ...candidate,

@@ -1,9 +1,9 @@
 import * as cheerio from "cheerio";
+import { fetcher } from "../../../core/lib/fetcher";
 import { Logger } from "../../../core/logger";
 import { proxyUrl } from "../../../core/proxy";
 import { animepahe as BASE_URL } from "../../origins";
 import {
-  DDOS_GUARD_HEADERS,
   decrypt,
   substringAfter,
   substringAfterLast,
@@ -37,23 +37,30 @@ const isoDate = (value: string) => {
   return Number.isNaN(date.getTime()) ? value : date.toISOString();
 };
 
+export class AnimepaheUnavailable extends Error {}
+
 export class Animepahe {
+  private static async load(url: string): Promise<string | null> {
+    const res = await fetcher(url, true, "animepahe");
+    if (res?.success) return res.text;
+    if (res?.status === 404) return null;
+    throw new AnimepaheUnavailable(`Animepahe responded ${res?.status ?? "with no response"}`);
+  }
+
   private static async api<T>(query: string): Promise<T | null> {
+    const text = await this.load(`${BASE_URL}/api?${query}`);
+    if (text === null) return null;
     try {
-      const res = await fetch(`${BASE_URL}/api?${query}`, { headers: DDOS_GUARD_HEADERS });
-      if (res.ok) return (await res.json()) as T;
-      Logger.warn(`[Animepahe] API ${res.status} for ${query}`);
+      return JSON.parse(text) as T;
     } catch (err) {
-      Logger.warn(`[Animepahe] API request failed for ${query}: ${String(err)}`);
+      Logger.warn(`[Animepahe] API returned invalid JSON for ${query}: ${String(err)}`);
+      throw new AnimepaheUnavailable("Animepahe returned an invalid response");
     }
-    return null;
   }
 
   private static async page(path: string) {
-    const res = await fetch(`${BASE_URL}${path}`, { headers: DDOS_GUARD_HEADERS });
-    if (res.ok) return cheerio.load(await res.text());
-    Logger.warn(`[Animepahe] ${res.status} for ${path}`);
-    return null;
+    const text = await this.load(`${BASE_URL}${path}`);
+    return text === null ? null : cheerio.load(text);
   }
 
   static async search(query: string): Promise<AnimeSearchItem[]> {
@@ -105,7 +112,7 @@ export class Animepahe {
         id,
         name: $('span[style="user-select:text"]').text().trim(),
         description: synopsis.text().trim(),
-        poster: $('img[data-src$=".jpg"]').attr("data-src")?.trim() || null,
+        poster: $("div.anime-poster a").attr("href")?.trim() || null,
         background: background
           ? background.startsWith("http")
             ? background
@@ -129,14 +136,15 @@ export class Animepahe {
           }),
       };
     } catch (err) {
+      if (err instanceof AnimepaheUnavailable) throw err;
       Logger.error(`[Animepahe] info failed for ${id}: ${String(err)}`);
       return null;
     }
   }
 
-  static async fetchAllEpisodes(id: string): Promise<Episode[]> {
+  static async fetchAllEpisodes(id: string): Promise<Episode[] | null> {
     const first = await this.api<ReleaseResponse>(`m=release&id=${id}&sort=episode_dsc&page=1`);
-    if (!first) return [];
+    if (!first) return null;
 
     const rest = await Promise.all(
       Array.from({ length: Math.max((first.last_page ?? 1) - 1, 0) }, (_, i) =>
@@ -201,6 +209,7 @@ export class Animepahe {
         };
       }
     } catch (err) {
+      if (err instanceof AnimepaheUnavailable) throw err;
       Logger.error(`[Animepahe] streams failed for ${animeId}/${episodeSession}: ${String(err)}`);
     }
   }
@@ -224,8 +233,11 @@ export class Animepahe {
   }
 
   private static async extractFromEmbed(kwikLink: string): Promise<string> {
-    const res = await fetch(kwikLink, { headers: SITE_HEADERS });
-    const $ = cheerio.load(await res.text());
+    const res = await fetcher(kwikLink, true, "kwik", {
+      headers: { Referer: SITE_HEADERS.Referer },
+    });
+    if (!res?.success) throw new Error(`Kwik page responded ${res?.status ?? "with no response"}`);
+    const $ = cheerio.load(res.text);
     const packed = $("script")
       .toArray()
       .map((el) => $(el).html() ?? "")

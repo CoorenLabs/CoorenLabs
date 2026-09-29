@@ -23,7 +23,9 @@ export async function extractNova(embedUrl, { userAgent = UA } = {}) {
   const data = JSON.parse(
     Buffer.concat([decipher.update(Buffer.from(hex, "hex")), decipher.final()]).toString("utf8"),
   );
-  const source = data.cf ?? data.source;
+  const source = [data.cfNative, data.source, data.cf].find(
+    (value) => typeof value === "string" && /^https?:\/\//.test(value),
+  );
   if (!source) throw new Error("Nova response missing m3u8 url");
   return [{ url: source, type: "hls", referer: `${url.origin}/` }];
 }

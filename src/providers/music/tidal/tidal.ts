@@ -64,6 +64,15 @@ async function request(path: string, params: Params = {}, sessionId?: string): P
 const settle = (promise: Promise<any>) =>
   promise.catch((err: TidalError) => ({ error: err.message, status: err.status }));
 
+const ensureFound = (promise: Promise<any>, lookup: () => Promise<unknown>) =>
+  promise.catch(async (err: TidalError) => {
+    if (err.status >= 500)
+      await lookup().catch((missing: TidalError) => {
+        if (missing?.status === 404) throw missing;
+      });
+    throw err;
+  });
+
 function decodeManifest(info: any) {
   if (typeof info?.manifest === "string") {
     info.manifestDecoded = Buffer.from(info.manifest, "base64").toString("utf-8");
@@ -182,7 +191,8 @@ export const tidal = {
   getTrack: (id: string) => request(`/tracks/${id}`),
   getTrackStreaming: (id: string, quality = "HI_RES", sessionId?: string) =>
     streaming("tracks", id, quality, sessionId),
-  getTrackPlaybackInfo: (id: string, quality = "HI_RES") => playbackInfo("tracks", id, quality),
+  getTrackPlaybackInfo: (id: string, quality = "HI_RES") =>
+    ensureFound(playbackInfo("tracks", id, quality), () => request(`/tracks/${id}`)),
   getTrackRadio: (id: string) => request(`/tracks/${id}/radio`),
   getRecommendations: (trackId: string, limit = 50, offset?: number) =>
     request(`/tracks/${trackId}/radio`, { limit, offset }),
@@ -200,7 +210,7 @@ export const tidal = {
     request(`/playlists/${id}/items`, { limit, offset }),
   getMix,
   getMixItems: (id: string, limit = 50, offset?: number) =>
-    request(`/mixes/${id}/items`, { limit, offset }),
+    ensureFound(request(`/mixes/${id}/items`, { limit, offset }), () => getMix(id)),
   getVideo: (id: string) => request(`/videos/${id}`),
   getVideoStreaming: (id: string, quality = "HIGH", sessionId?: string) =>
     streaming("videos", id, quality, sessionId),

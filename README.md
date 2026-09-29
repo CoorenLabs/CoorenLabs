@@ -62,16 +62,21 @@ cp .env.example .env
 bun run dev
 ```
 
-Use `bun run hot` for hot reload, `bun run dev:node` for Node.js or `bun run dev:deno` for Deno. The API overview is served at `/` and the OpenAPI docs at `/docs`.
+`dev` restarts on file changes. The API overview is served at `/` and the OpenAPI docs at `/docs`.
 
-### Build for Production
+### Production
 
 ```bash
-bun run build:bun
-bun run build:node
+bun run start
 ```
 
-`build:node` produces `dist/index.js`, which `bun run start:node` runs with Node.js.
+### Docker
+
+```bash
+docker compose up -d --build
+```
+
+This starts the API on port `3000` with Chromium and a Redis cache. Values for `PORT`, `SERVER_ORIGIN`, `LOG_LEVEL`, `CORS_ORIGIN` and `CORS_CREDENTIALS` are read from `.env` or your shell; set `SERVER_ORIGIN` to the public URL when deploying.
 
 ---
 
@@ -88,7 +93,6 @@ All variables are optional in development; see `.env.example`.
 | `CORS_ORIGIN`      | `*`                     | `*` or a comma-separated list of allowed origins.                |
 | `CORS_CREDENTIALS` | `false`                 | Allow credentialed CORS requests.                                |
 | `REDIS_URL`        | —                       | Enables caching when set (Bun runtime).                          |
-| `DATABASE_URL`     | —                       | Neon Postgres URL for AniList metadata overrides.                |
 
 ---
 
@@ -127,8 +131,6 @@ export const primesrcRoutes = new Elysia({ prefix: "/primesrc" }).get(
 ```bash
 bun run typecheck
 bun run lint
-bun run lint:fix
-bun run format
 ```
 
 ---

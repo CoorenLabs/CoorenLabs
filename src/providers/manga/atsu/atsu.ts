@@ -28,9 +28,9 @@ type ExploreFilter = {
   adult: boolean;
 };
 
-function get<T = any>(path: string, params?: Record<string, string>) {
+function get<T = any>(path: string, params?: Record<string, string>, rejectsInput = false) {
   const query = params ? `?${new URLSearchParams(params)}` : "";
-  return getJson<T>("Atsu", `${BASE_URL}${path}${query}`, { headers: HEADERS });
+  return getJson<T>("Atsu", `${BASE_URL}${path}${query}`, { headers: HEADERS }, rejectsInput);
 }
 
 function image(path?: string | null) {
@@ -91,6 +91,7 @@ async function fetchSection(
   const { items } = await get(
     `/api/${section === "topRated" ? "home2" : "infinite"}/${section}`,
     params,
+    true,
   );
   return { page, items: (items ?? []).map(toItem) };
 }
@@ -206,11 +207,11 @@ async function explore({ genres, types, statuses, page, adult }: ExploreFilter) 
 }
 
 async function fetchAuthor(slug: string, page: number, type: string | undefined, adult: boolean) {
-  const data = await get("/api/browse/author", {
-    authorSlug: slug,
-    page: String(page),
-    ...(type && { type }),
-  });
+  const data = await get(
+    "/api/browse/author",
+    { authorSlug: slug, page: String(page), ...(type && { type }) },
+    true,
+  );
   if (!data?.author) throw new HttpError(404, "Author not found");
   const items: any[] = data.items ?? [];
   return {

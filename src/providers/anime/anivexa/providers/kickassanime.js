@@ -1,6 +1,6 @@
 import { getMedia } from "../core/anilist.js";
 import { memo, TTL } from "../core/cache.js";
-import { fetchJson, notFound } from "../core/http.js";
+import { fetchJson, notFound, settle } from "../core/http.js";
 import { buildTitles, diceCoeff, episodeMeta, expectedCount, watchId } from "../core/utils.js";
 
 const BASE = "https://kaa.lt";
@@ -96,13 +96,13 @@ function resolveSeries(anilistId, ctx = {}) {
     const queries = searchQueries(titles);
     if (!queries.length) throw new Error(`KAA: no usable search queries for AniList ${anilistId}`);
     const candidates = new Map();
-    await Promise.all(
+    await settle(
       queries.map(async (query) => {
-        for (const result of await search(query).catch(() => []))
+        for (const result of await search(query))
           if (!candidates.has(result.slug)) candidates.set(result.slug, result);
       }),
     );
-    if (!candidates.size) throw new Error(`KAA: no search results for AniList ${anilistId}`);
+    if (!candidates.size) throw notFound(`KAA: no search results for AniList ${anilistId}`);
     const best = [...candidates.values()]
       .map((candidate) => ({
         candidate,
@@ -110,9 +110,9 @@ function resolveSeries(anilistId, ctx = {}) {
       }))
       .sort((a, b) => b.score - a.score)[0];
     if (!best || best.score < 0.5)
-      throw new Error(`KAA: no confident match for AniList ${anilistId}`);
+      throw notFound(`KAA: no confident match for AniList ${anilistId}`);
     if (best.score < 0.6)
-      throw new Error(
+      throw notFound(
         `KAA: low confidence match for AniList ${anilistId} — best "${best.candidate.slug}" score ${best.score.toFixed(3)}`,
       );
     return {

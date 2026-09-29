@@ -357,7 +357,7 @@ function playerStreams(raw, number) {
 }
 
 export async function watch(anilistId, audio, episode) {
-  if (audio !== "sub") throw new Error(`AniZone ${audio} episode ${episode} not found`);
+  if (audio !== "sub") throw notFound(`AniZone ${audio} episode ${episode} not found`);
   const { media, series, offset, expected } = await seriesContext(anilistId, {});
   let page = await watchPage(series.slug, episode);
   let current = episode;
@@ -377,10 +377,10 @@ export async function watch(anilistId, audio, episode) {
   const target = alignEpisodes(listed, media, expected).find(
     (item) => (mode === "offset" ? item.number - offset : item.number) === episode,
   );
-  if (!target) throw new Error(`AniZone ${audio} episode ${episode} not found`);
+  if (!target) throw notFound(`AniZone ${audio} episode ${episode} not found`);
   const raw =
     target.sourceNumber === current ? page : await watchPage(series.slug, target.sourceNumber);
-  if (!raw) throw new Error(`AniZone ${audio} episode ${episode} not found`);
+  if (!raw) throw notFound(`AniZone ${audio} episode ${episode} not found`);
   return {
     anilistId: Number(anilistId),
     episode,

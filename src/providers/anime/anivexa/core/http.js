@@ -21,6 +21,13 @@ export function notFound(message) {
   return withStatus(new Error(message), 404);
 }
 
+export async function settle(promises, fallback) {
+  const results = await Promise.allSettled(promises);
+  const failed = results.filter((result) => result.status === "rejected");
+  if (failed.length && failed.length === results.length) throw withStatus(failed[0].reason, 502);
+  return results.map((result) => (result.status === "fulfilled" ? result.value : fallback));
+}
+
 export function request(url, { headers, timeout = TIMEOUT, signal, ...init } = {}) {
   return fetch(url, {
     ...init,

@@ -1,6 +1,6 @@
 import { getMedia, getPrequelOffset } from "./anilist.js";
 import { memo, TTL } from "./cache.js";
-import { fetchText, HTML_ACCEPT } from "./http.js";
+import { fetchText, HTML_ACCEPT, notFound, settle } from "./http.js";
 
 const ENTITIES = { quot: '"', amp: "&", lt: "<", gt: ">", apos: "'", nbsp: " " };
 const JS_ESCAPES = { b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", 0: "\0", "\n": "" };
@@ -232,9 +232,9 @@ function slugQueries(title) {
 async function findTopSlugs(titles, searchFn, limit = 6) {
   const queries = new Set(titles.slice(0, 4).flatMap(slugQueries));
   const candidates = new Map();
-  await Promise.all(
+  await settle(
     [...queries].map(async (query) => {
-      const results = await searchFn(query).catch(() => []);
+      const results = await searchFn(query);
       for (const result of results)
         if (!candidates.has(result.slug)) candidates.set(result.slug, result.text);
     }),
@@ -371,31 +371,32 @@ export function watchId(provider, anilistId, audio, number) {
 }
 
 async function selectSeries(candidates, scrapeSeries, expected, status, offset, minScore) {
-  const results = await Promise.all(
-    candidates.map(async (candidate) => {
-      const episodes = await scrapeSeries(candidate.slug).catch(() => []);
-      const localHits = expected
-        ? episodes.filter((e) => e.number >= 1 && e.number <= expected).length
-        : episodes.length;
-      const offsetHits =
-        expected && offset
-          ? episodes.filter((e) => e.number > offset && e.number <= offset + expected).length
-          : 0;
-      let countScore = 1;
-      if (expected && expected >= 6) {
-        const needed =
-          status === "FINISHED" ? Math.ceil(expected * 0.9) : Math.max(1, expected - 3);
-        const hits = Math.max(localHits, offsetHits);
-        countScore = hits >= needed ? 1 : hits / needed;
-      }
-      return {
-        ...candidate,
-        episodes,
-        mode: offsetHits > localHits ? "offset" : "local",
-        score: candidate.score * 0.7 + countScore * 0.3,
-      };
-    }),
+  const scraped = await settle(
+    candidates.map(async (candidate) => scrapeSeries(candidate.slug)),
+    [],
   );
+  const results = candidates.map((candidate, index) => {
+    const episodes = scraped[index];
+    const localHits = expected
+      ? episodes.filter((e) => e.number >= 1 && e.number <= expected).length
+      : episodes.length;
+    const offsetHits =
+      expected && offset
+        ? episodes.filter((e) => e.number > offset && e.number <= offset + expected).length
+        : 0;
+    let countScore = 1;
+    if (expected && expected >= 6) {
+      const needed = status === "FINISHED" ? Math.ceil(expected * 0.9) : Math.max(1, expected - 3);
+      const hits = Math.max(localHits, offsetHits);
+      countScore = hits >= needed ? 1 : hits / needed;
+    }
+    return {
+      ...candidate,
+      episodes,
+      mode: offsetHits > localHits ? "offset" : "local",
+      score: candidate.score * 0.7 + countScore * 0.3,
+    };
+  });
   return (
     results
       .filter((result) => result.episodes.length && result.score >= minScore)
@@ -421,7 +422,7 @@ export async function resolveSlugSeries(provider, label, anilistId, ctx, options
       offset,
       minScore,
     );
-    if (!selected) throw new Error(`${label} match not found for AniList ${anilistId}`);
+    if (!selected) throw notFound(`${label} match not found for AniList ${anilistId}`);
     episodes = selected.episodes;
     return {
       slug: selected.slug,

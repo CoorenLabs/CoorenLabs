@@ -1,5 +1,5 @@
 import { PROVIDER_NAMES } from "../providers/index.js";
-import { forgetMedia, getAniZip, getMedia } from "./anilist.js";
+import { forgetMedia, getAniZip, mediaOrNull } from "./anilist.js";
 import { background, needsRefresh, read, TTL, write } from "./cache.js";
 import { providerEpisodes } from "./episode-strategy.js";
 import { mapAnimeIds } from "./mapper.js";
@@ -41,7 +41,7 @@ function latestAniZipEpisode(anizip) {
 
 function resolveShared(anilistId, fresh = false) {
   if (fresh) forgetMedia(anilistId);
-  return Promise.all([getMedia(anilistId).catch(() => null), getAniZip(anilistId, fresh)]);
+  return Promise.all([mediaOrNull(anilistId), getAniZip(anilistId, fresh)]);
 }
 
 async function buildResponse(anilistId, media, anizip, fresh = false) {

@@ -28,8 +28,8 @@ const ORIGINS: Record<string, string> = {
   ja: "manga",
   kr: "manhwa",
   ko: "manhwa",
-  cn: "manhua",
-  zh: "manhua",
+  manhua: "cn",
+  zh: "cn",
   en: "comics",
 };
 const PERIODS: Record<string, string> = {
@@ -196,9 +196,15 @@ function byOrigin(origin = "all") {
 }
 
 async function topChapters(time: string | undefined, limit = 12, titlesOnly = false) {
-  const period = PERIODS[time || "day"];
-  if (!period) throw new HttpError(400, "Query parameter 'time' must be one of day, week, month");
-  const { data } = await api("/chapter/top-views", { period, limit, adult_mode: ADULT_MODE });
+  const key = time || "day";
+  if (!Object.hasOwn(PERIODS, key)) {
+    throw new HttpError(400, "Query parameter 'time' must be one of day, week, month");
+  }
+  const { data } = await api("/chapter/top-views", {
+    period: PERIODS[key],
+    limit,
+    adult_mode: ADULT_MODE,
+  });
   const seen = new Set<string>();
   const entries = objects(data).filter((entry) => {
     if (!titlesOnly) return true;
@@ -226,9 +232,9 @@ function search(options: SearchOptions) {
     keyword: options.keyword,
     page: options.page ?? 1,
     limit: options.limit ?? 24,
-    sort_by: options.sort ?? "lastupdate",
+    sort_by: options.sort ?? (options.keyword ? undefined : "lastupdate"),
     sort_order: options.order ?? "desc",
-    type: options.type,
+    type: category(options.type),
     status: options.status,
     publicationDemographic: options.demographic,
     included_tags: options.includedTags?.join(","),
@@ -238,15 +244,15 @@ function search(options: SearchOptions) {
 }
 
 function filters(query: Query) {
-  const [, base, order] = /^(.*?)(?:_(asc|desc))?$/.exec(query.sort || "updated_chapters_desc")!;
+  const [, base, order] = /^(.*?)(?:_(asc|desc))?$/.exec(query.sort ?? "")!;
   const pick = (value?: string) => (value && value !== "any" ? value : undefined);
   return search({
     keyword: query.q,
     page: num(query.page, 1),
     limit: num(query.limit, 10, 1, 100),
-    sort: SORTS[base] ?? base,
+    sort: base ? (SORTS[base] ?? base) : undefined,
     order: order ?? query.order ?? "desc",
-    type: category(query.original_lang),
+    type: query.original_lang,
     status: pick(query.status),
     demographic: pick(query.demographic),
     includedTags: tagList(query.tag_included),

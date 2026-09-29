@@ -7,7 +7,10 @@ export type FetchResult = { success: boolean; status: number; text: string };
 
 type CfCredentials = { cookie: string; userAgent: string };
 
+type Attempt = FetchResult & { challenged: boolean };
+
 const BLOCKED_STATUSES = [403, 503];
+const CHALLENGE_PAGE = /_cf_chl_opt|<title>Just a moment/i;
 const RATE_LIMIT_RETRY_DELAY = 2_000;
 const CREDENTIALS_FALLBACK_TTL = 2 * 3600;
 const UNSOLVABLE_BACKOFF = 10 * 60_000;
@@ -43,7 +46,7 @@ async function request(
   url: string,
   init: RequestInit,
   { browserTls, credentials }: { browserTls: boolean; credentials: CfCredentials | null },
-): Promise<FetchResult> {
+): Promise<Attempt> {
   const res = browserTls
     ? await browserFetch(url, {
         method: init.method,
@@ -51,7 +54,11 @@ async function request(
         body: typeof init.body === "string" ? init.body : undefined,
       })
     : await fetch(url, init);
-  return { success: res.ok, status: res.status, text: await res.text() };
+  const text = await res.text();
+  const challenged =
+    res.headers.get("cf-mitigated") === "challenge" ||
+    (BLOCKED_STATUSES.includes(res.status) && CHALLENGE_PAGE.test(text));
+  return { success: res.ok, status: res.status, text, challenged };
 }
 
 function solve(url: string, key: string, label: string): Promise<CfCredentials | null> {
@@ -95,16 +102,22 @@ export async function fetcher(
       return first;
     }
 
-    if (credentials) {
+    let last = first;
+    if (credentials && first.challenged) {
       await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_RETRY_DELAY));
-      const again = await request(url, init, { browserTls: true, credentials });
-      if (again.success) return again;
+      last = await request(url, init, { browserTls: true, credentials });
+      if (last.success) return last;
     } else if (!browserTls) {
-      const impersonated = await request(url, init, { browserTls: true, credentials: null });
-      if (impersonated.success) {
+      last = await request(url, init, { browserTls: true, credentials: null });
+      if (last.success) {
         browserTlsHosts.add(host);
-        return impersonated;
+        return last;
       }
+    }
+
+    if (!last.challenged) {
+      Logger.warn(`[${label}] HTTP ${last.status} from ${url}`);
+      return last;
     }
 
     remembered.delete(key);

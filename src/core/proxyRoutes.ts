@@ -51,7 +51,7 @@ function isPrivateAddress(address: string): boolean {
   );
 }
 
-async function isAllowed(target: URL): Promise<boolean> {
+export async function isAllowed(target: URL): Promise<boolean> {
   if (target.protocol !== "http:" && target.protocol !== "https:") return false;
   const host = target.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   if (host === "localhost" || host.endsWith(".localhost")) return false;
@@ -254,9 +254,10 @@ async function forward(
 
   const type = res.headers.get("content-type");
   const disguised = kind === "segment" && /^(?:text\/html|image\/)/i.test(type ?? "");
+  const mislabeled = kind === "segment" && /^(?:text\/(?!vtt\b|plain\b)|image\/)/i.test(type ?? "");
   const unwrap = disguised && res.status === 200 && res.body !== null;
   const out = new Headers({
-    "content-type": type && !disguised ? type : FALLBACK_TYPE[kind],
+    "content-type": type && !mislabeled ? type : FALLBACK_TYPE[kind],
   });
   if (!unwrap && !res.headers.has("content-encoding")) {
     for (const name of ["content-length", "content-range", "accept-ranges"]) {

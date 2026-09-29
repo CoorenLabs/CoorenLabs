@@ -271,14 +271,14 @@ function skipRange(start, end) {
 }
 
 export async function watch(anilistId, audio, episode) {
-  if (audio !== "sub") throw new Error("AnimeOnsen only provides subtitled streams");
+  if (audio !== "sub") throw notFound("AnimeOnsen only provides subtitled streams");
   const media = await getMedia(anilistId);
   const series = await resolveSeries(anilistId, { media });
   const expected = expectedCount(media);
   const target = (await fetchEpisodes(series)).find(
     (item) => item.number === episode && (!expected || item.number <= expected),
   );
-  if (!target) throw new Error(`AnimeOnsen episode ${episode} not found`);
+  if (!target) throw notFound(`AnimeOnsen episode ${episode} not found`);
   const video = await api(
     `/v4/content/${encodeURIComponent(series.contentId)}/video/${encodeURIComponent(target.sourceNumber)}`,
   );

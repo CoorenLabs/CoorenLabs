@@ -85,6 +85,7 @@ const endpoints: Endpoint[] = [
   [
     aliases("track", "tracks", "/:id/playbackinfo"),
     ({ params, query }) => tidal.getTrackPlaybackInfo(params.id, query.audioQuality || "HI_RES"),
+    "Track not found or invalid ID",
   ],
   [aliases("track", "tracks", "/:id/radio"), ({ params }) => tidal.getTrackRadio(params.id)],
   [
@@ -132,6 +133,7 @@ const endpoints: Endpoint[] = [
     aliases("mix", "mixes", "/:id/items"),
     async ({ params, query }) =>
       tidal.cleanItems(await tidal.getMixItems(params.id, limit(query, 50), offset(query))),
+    "Mix not found",
   ],
   [
     aliases("video", "videos", "/:id"),
