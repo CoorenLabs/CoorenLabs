@@ -1,112 +1,60 @@
 import {
-  ANILIST_URL,
-  SPOTLIGHT_QUERY,
-  HOME_DATA_QUERY,
-} from "../lib/queries";
-import {
-  extractAniZipImages,
-  fetchWithRetry,
+  descriptionOf,
+  fetchAniZip,
   formatAiringInfo,
+  formatSeason,
   formatStatus,
   getSeason,
+  presentMedia,
+  queryAniList,
 } from "../lib/helpers";
+import { HOME_QUERY } from "../lib/queries";
 
-import { ANILIST_SPOTLIGHT_IDS } from "../../../../core/config";
+const SPOTLIGHT_SIZE = 10;
 
-import { remapManager } from "../../../../core/remapManager";
+const listItems = (page: any) =>
+  (page?.media ?? []).map((media: any) => ({
+    id: media.id,
+    ...presentMedia(media),
+    type: media.format || "TV",
+    episodes: media.episodes,
+    status: formatStatus(media.status),
+  }));
 
-/**
- * Fetch home page data: spotlight carousel + trending/popular/seasonal/etc. lists.
- * Ported from anime-stream-link/server.js → GET /home
- */
 export async function scrapeHome() {
-  const currentSeason = getSeason();
-  const currentYear = new Date().getFullYear();
+  const data = await queryAniList(HOME_QUERY, {
+    season: getSeason(),
+    seasonYear: new Date().getFullYear(),
+  });
 
-  // Fetch spotlight entries in parallel
-  const spotlightPromise = Promise.allSettled(
-    ANILIST_SPOTLIGHT_IDS.map(async (anilistId) => {
-      const [anilistRes, aniZipRes] = await Promise.all([
-        fetchWithRetry(ANILIST_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ query: SPOTLIGHT_QUERY, variables: { id: anilistId } }),
-        }).then((r) => r.json()),
+  const candidates: any[] = data.spotlight?.media ?? [];
+  const featured = [
+    ...candidates.filter((media) => media.bannerImage),
+    ...candidates.filter((media) => !media.bannerImage),
+  ].slice(0, SPOTLIGHT_SIZE);
+  const aniZip = await Promise.all(featured.map((media) => fetchAniZip(media.id)));
 
-        fetchWithRetry(`https://api.ani.zip/mappings?anilist_id=${anilistId}`)
-          .then((r) => r.json())
-          .catch(() => null),
-      ]);
-
-      const media = anilistRes?.data?.Media;
-      if (!media) return null;
-
-      const remap = remapManager.getRemap(anilistId);
-      const { banner, logo } = extractAniZipImages(aniZipRes, remap);
-      const { timeLeft, episodeCount } = formatAiringInfo(media);
-
-      return {
-        id: media.id,
-        title: remap?.name || media.title.english || media.title.romaji || "",
-        poster: remap?.poster_img || media.coverImage?.extraLarge || "",
-        logo: remap?.logo || logo || "",
-        banner: remap?.banner || banner || media.bannerImage || media.coverImage?.extraLarge || "",
-        description: remap?.description || media.description?.replace(/<[^>]*>?/gm, "") || "",
-        season:
-          media.season && media.seasonYear
-            ? `${media.season.charAt(0) + media.season.slice(1).toLowerCase()} ${media.seasonYear}`
-            : "Unknown",
-        episode: episodeCount,
-        timeLeft,
-        status: formatStatus(media.status),
-        type: media.format || "TV",
-      };
-    }),
-  );
-
-  // Fetch section lists in one GraphQL call
-  const homeDataPromise = fetchWithRetry(ANILIST_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      query: HOME_DATA_QUERY,
-      variables: { season: currentSeason, seasonYear: currentYear },
-    }),
-  }).then((r) => r.json());
-
-  const [spotlightResults, homeDataResponse] = await Promise.all([
-    spotlightPromise,
-    homeDataPromise,
-  ]);
-
-  const spotlight = spotlightResults
-    .filter((r) => r.status === "fulfilled" && r.value !== null)
-    .map((r: any) => r.value);
-
-  const lists = homeDataResponse?.data || {};
-
-  const formatMediaList = (mediaList: any[]) =>
-    (mediaList || []).map((m: any) => {
-      const remap = remapManager.getRemap(m.id);
-      return {
-        id: m.id,
-        title: remap?.name || m.title.english || m.title.romaji || "",
-        poster: remap?.poster_img || m.coverImage?.extraLarge || "",
-        banner: remap?.banner || remap?.banner_image || m.bannerImage || m.coverImage?.extraLarge || "",
-        logo: remap?.logo || remap?.clear_logo || "",
-        type: m.format || "TV",
-        episodes: m.episodes,
-        status: formatStatus(m.status),
-      };
-    });
+  const spotlight = featured.map((media, index) => {
+    const { timeLeft, episodeCount } = formatAiringInfo(media);
+    return {
+      id: media.id,
+      ...presentMedia(media, aniZip[index]),
+      description: descriptionOf(media),
+      season: formatSeason(media),
+      episode: episodeCount,
+      timeLeft,
+      status: formatStatus(media.status),
+      type: media.format || "TV",
+    };
+  });
 
   return {
     spotlight,
-    "recently-added": formatMediaList(lists.trending?.media),
-    "popular-anime": formatMediaList(lists.popular?.media),
-    "popular-movies": formatMediaList(lists.movies?.media),
-    "seasonal-anime": formatMediaList(lists.seasonal?.media),
-    "anime-of-all-time": formatMediaList(lists.allTime?.media),
-    "coming-soon": formatMediaList(lists.comingSoon?.media),
+    "recently-added": listItems(data.trending),
+    "popular-anime": listItems(data.popular),
+    "popular-movies": listItems(data.movies),
+    "seasonal-anime": listItems(data.seasonal),
+    "anime-of-all-time": listItems(data.allTime),
+    "coming-soon": listItems(data.comingSoon),
   };
 }

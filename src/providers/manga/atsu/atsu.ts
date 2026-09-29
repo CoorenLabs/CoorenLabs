@@ -1,338 +1,241 @@
-import axios, { type AxiosInstance } from "axios";
+import { getJson, HttpError, imageUrl, proxyImage, USER_AGENT } from "../shared";
 
 const BASE_URL = "https://atsu.moe";
-const API_HOME = `${BASE_URL}/api/home/page`;
+const CDN = "https://cdn.atsu.moe/static";
+const PAGE_SIZE = 40;
+const DEFAULT_TYPES = "Manga,Manwha,Manhua,OEL";
+const HEADERS = { Accept: "application/json", "User-Agent": USER_AGENT, Referer: `${BASE_URL}/` };
+const SEARCH = {
+  q: "*",
+  query_by: "title,englishTitle,otherNames,authors,acronyms",
+  include_fields: "id,title,poster,posterSmall,posterMedium,type,isAdult",
+  sort_by: "views:desc",
+};
 
-function proxyAtsuImage(imagePath: string, baseApiUrl: string): string {
-  if (!imagePath) return "";
-  const root = baseApiUrl.replace(/\/$/, "");
-  const normalizedPath = imagePath.replace(/^\//, "");
+export type Section =
+  | "trending"
+  | "mostBookmarked"
+  | "recentlyUpdated"
+  | "topRated"
+  | "popular"
+  | "recentlyAdded";
 
-  if (normalizedPath.startsWith("static/")) {
-    return `${root}/image/atsu.moe/${normalizedPath}`;
-  }
-  return `${root}/image/atsu.moe/static/${normalizedPath}`;
+type ExploreFilter = {
+  genres?: string;
+  types?: string;
+  statuses?: string;
+  page: number;
+  adult: boolean;
+};
+
+function get<T = any>(path: string, params?: Record<string, string>, rejectsInput = false) {
+  const query = params ? `?${new URLSearchParams(params)}` : "";
+  return getJson<T>("Atsu", `${BASE_URL}${path}${query}`, { headers: HEADERS }, rejectsInput);
 }
 
-export class AtsuParser {
-  private http: AxiosInstance;
+function image(path?: string | null) {
+  if (!path) return "";
+  if (/^https?:\/\//.test(path)) return imageUrl("atsu", path);
+  return imageUrl("atsu", `${CDN}/${path.replace(/^\/+/, "").replace(/^static\//, "")}`);
+}
 
-  constructor() {
-    this.http = axios.create({
-      baseURL: BASE_URL,
-      timeout: 15_000,
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-        Referer: `${BASE_URL}/`,
-      },
-    });
-  }
-
-  private transformItem(item: any, baseApiUrl: string) {
-    return {
-      id: item.id,
-      title: item.title,
-      thumbnail: proxyAtsuImage(item.image, baseApiUrl),
-      images: {
-        small: proxyAtsuImage(item.smallImage, baseApiUrl),
-        medium: proxyAtsuImage(item.mediumImage, baseApiUrl),
-        large: proxyAtsuImage(item.largeImage, baseApiUrl),
-      },
-      type: item.type,
-      isAdult: item.isAdult ?? false,
-    };
-  }
-
-  /**
-   * Internal helper to poll an endpoint. Atsu frequently returns empty items
-   * initially while it fetches data in the background.
-   */
-  private async pollApi(url: string, maxAttempts: number, delayMs: number): Promise<any> {
-    let lastData = null;
-    for (let i = 0; i < maxAttempts; i++) {
-      try {
-        const { data } = await this.http.get(url);
-        lastData = data;
-
-        // If we got valid items, break out of the loop early and return them!
-        if (data && Array.isArray(data.items) && data.items.length > 0) {
-          return data;
-        }
-      } catch (_err) {
-        // Ignore network errors during polling, we will just try again
-      }
-
-      // Wait for delayMs before the next attempt (don't wait after the last attempt)
-      if (i < maxAttempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-    return lastData;
-  }
-
-  async parseHome(baseApiUrl: string, isAdult: boolean = false): Promise<any> {
-    try {
-      const url = isAdult ? `${API_HOME}?adult=1` : API_HOME;
-      const { data } = await this.http.get(url);
-      const result: Record<string, any> = {};
-
-      data.homePage.sections.forEach((section: any) => {
-        if (section.layout === "carousel") {
-          result[section.key] = {
-            title: section.title,
-            items: (section.items || []).map((item: any) => this.transformItem(item, baseApiUrl)),
-          };
-        }
-      });
-      return result;
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async fetchInfiniteSection(
-    section: string,
-    page: number,
-    queryParams: Record<string, string>,
-    baseApiUrl: string,
-    isAdult: boolean = false,
-  ): Promise<any> {
-    try {
-      const params = new URLSearchParams({ page: page.toString(), ...queryParams });
-      if (isAdult) params.set("adult", "1");
-
-      const url = `/api/infinite/${section}?${params.toString()}`;
-      const { data } = await this.http.get(url);
-
-      return {
-        page,
-        items: (data.items || []).map((item: any) => this.transformItem(item, baseApiUrl)),
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async fetchMangaDetails(id: string, baseApiUrl: string): Promise<any> {
-    try {
-      const { data } = await this.http.get(`/api/manga/page?id=${encodeURIComponent(id)}`);
-      if (!data || !data.mangaPage) return { error: "Manga not found" };
-
-      const manga = data.mangaPage;
-      let chapters = manga.chapters || [];
-
-      if (manga.hasMoreChapters) {
-        try {
-          const allChapsRes = await this.http.get(
-            `/api/manga/allChapters?mangaId=${encodeURIComponent(id)}`,
-          );
-          if (allChapsRes.data?.chapters) chapters = allChapsRes.data.chapters;
-        } catch (_e) {
-          console.error("Failed to fetch all chapters, falling back to partial list.");
-        }
-      }
-
-      const scanlatorMap: Record<string, string> = {};
-      if (manga.scanlators) {
-        manga.scanlators.forEach((scan: any) => {
-          scanlatorMap[scan.id] = scan.name;
-        });
-      }
-
-      return {
-        id: manga.id,
-        title: manga.title,
-        englishTitle: manga.englishTitle || null,
-        altTitles: manga.otherNames || [],
-        synopsis: manga.synopsis || "",
-        type: manga.type,
-        isAdult: manga.isAdult ?? false,
-        status: manga.status || "Unknown",
-        genres: (manga.genres || []).map((g: any) => ({
-          genre: g.name,
-          slug: g.id,
-        })),
-        authors: (manga.authors || []).map((a: any) => ({
-          author: a.name,
-          slug: a.slug || a.id,
-          role: a.type || "Author",
-        })),
-        scanlators: manga.scanlators || [],
-        poster: proxyAtsuImage(manga.poster?.image || manga.poster?.id, baseApiUrl),
-        banner: manga.banner?.url ? proxyAtsuImage(manga.banner.url, baseApiUrl) : "",
-        rating: manga.avgRating || null,
-        views: manga.views || null,
-        totalChapters: manga.totalChapterCount || chapters.length,
-        chapters: chapters.map((ch: any) => {
-          const scanId = ch.scanlationMangaId || ch.scanId || null;
-          return {
-            id: ch.id,
-            title: ch.title || `Chapter ${ch.number}`,
-            number: ch.number,
-            pages: ch.pageCount,
-            createdAt: ch.createdAt,
-            scanId: scanId,
-            scanlator: scanId ? scanlatorMap[scanId] || "Unknown" : "Unknown",
-          };
-        }),
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async fetchChapterInfo(id: string): Promise<any> {
-    try {
-      const { data } = await this.http.get(`/api/manga/info?mangaId=${encodeURIComponent(id)}`);
-      if (!data || !data.id) return { error: "Info not found" };
-
-      return {
-        id: data.id,
-        title: data.title,
-        type: data.type,
-        chapters: (data.chapters || []).map((ch: any) => ({
-          id: ch.id,
-          title: ch.title || `Chapter ${ch.number}`,
-          number: ch.number,
-          pages: ch.pageCount,
-          scanId: ch.scanId,
-        })),
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async fetchChapterPages(mangaId: string, chapterId: string, baseApiUrl: string): Promise<any> {
-    try {
-      const { data } = await this.http.get(
-        `/api/read/chapter?mangaId=${encodeURIComponent(mangaId)}&chapterId=${encodeURIComponent(chapterId)}`,
-      );
-      if (!data || !data.readChapter) return { error: "Chapter not found" };
-
-      const ch = data.readChapter;
-      return {
-        id: ch.id,
-        title: ch.title,
-        pages: (ch.pages || []).map((img: any) => ({
-          img: proxyAtsuImage(img.image, baseApiUrl),
-          page: img.number,
-        })),
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async fetchFilters(): Promise<any> {
-    try {
-      const { data } = await this.http.get("/api/explore/availableFilters");
-      return {
-        genres: (data.genres || []).map((g: any) => ({ name: g.name, slug: g.id })),
-        types: (data.types || []).map((t: any) => ({ name: t.name, slug: t.id })),
-        statuses: (data.statuses || []).map((s: any) => ({ name: s.name, slug: s.id })),
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async fetchFilteredView(
-    params: {
-      genres?: string;
-      authors?: string;
-      types?: string;
-      statuses?: string;
-      page?: number;
-      adult?: boolean;
+function toItem(item: any) {
+  return {
+    id: item.id,
+    title: item.title,
+    thumbnail: image(item.image ?? item.poster),
+    images: {
+      small: image(item.smallImage ?? item.posterSmall),
+      medium: image(item.mediumImage ?? item.posterMedium),
+      large: image(item.largeImage ?? item.image ?? item.poster),
     },
-    baseApiUrl: string,
-  ): Promise<any> {
-    try {
-      const payload: Record<string, any> = {
-        filter: {
-          genres: params.genres ? params.genres.split(",").map((x) => x.trim()) : [],
-          types: params.types
-            ? params.types.split(",").map((x) => x.trim())
-            : ["Manga", "Manwha", "Manhua", "OEL"],
-          statuses: params.statuses ? params.statuses.split(",").map((x) => x.trim()) : [],
-        },
-        page: params.page || 0,
-      };
-
-      if (params.authors) {
-        payload.filter.authors = params.authors.split(",").map((x: string) => x.trim());
-      }
-
-      const url = params.adult ? "/api/explore/filteredView?adult=1" : "/api/explore/filteredView";
-      const { data } = await this.http.post(url, payload);
-
-      return {
-        page: params.page || 0,
-        items: (data.items || []).map((item: any) => this.transformItem(item, baseApiUrl)),
-      };
-    } catch (err: any) {
-      const errorMessage = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-      return { error: `[Atsu API ${err.response?.status || "Error"}] ${errorMessage}` };
-    }
-  }
-
-  async fetchAuthor(
-    slug: string,
-    page: number,
-    type: string | undefined,
-    baseApiUrl: string,
-  ): Promise<any> {
-    try {
-      let currentType = type || "Author";
-      let url = `/api/browse/author?authorSlug=${encodeURIComponent(slug)}&type=${currentType}&page=${page}`;
-
-      // Poll up to 4 times (1.5 seconds apart) ~ max 6 seconds total
-      let data = await this.pollApi(url, 4, 1500);
-
-      // Smart Fallback: If still empty and no explicit role was requested, try searching them as an Artist
-      if ((!data || !data.items || data.items.length === 0) && !type) {
-        currentType = "Artist";
-        url = `/api/browse/author?authorSlug=${encodeURIComponent(slug)}&type=${currentType}&page=${page}`;
-        // Poll up to 3 times (1.5 seconds apart) ~ max 4.5 seconds total
-        data = await this.pollApi(url, 3, 1500);
-      }
-
-      if (!data || !data.items) return { error: "Author not found" };
-
-      return {
-        author: data.author?.name || slug,
-        role: currentType,
-        page,
-        items: data.items.map((item: any) => this.transformItem(item, baseApiUrl)),
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async proxyImage(path: string): Promise<{ content: Buffer; contentType: string } | null> {
-    try {
-      const resp = await this.http.get(`https://${path}`, {
-        responseType: "arraybuffer",
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-          Referer: `${BASE_URL}/`,
-        },
-      });
-      if (resp.status === 200) {
-        const contentType = (resp.headers["content-type"] as string) || "image/jpeg";
-        return { content: Buffer.from(resp.data as ArrayBuffer), contentType };
-      }
-    } catch {
-      return null;
-    }
-    return null;
-  }
+    type: item.type,
+    isAdult: item.isAdult ?? false,
+  };
 }
 
-export const atsu = new AtsuParser();
+function list(value?: string) {
+  return (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function quote(value: string) {
+  return `\`${value.replace(/`/g, "\\`")}\``;
+}
+
+async function parseHome(adult = false) {
+  const { homePage } = await get("/api/home/page", adult ? { adult: "1" } : undefined);
+  const result: Record<string, { title: string; items: ReturnType<typeof toItem>[] }> = {};
+  for (const section of homePage?.sections ?? []) {
+    if (section.layout !== "carousel") continue;
+    result[section.key] = { title: section.title, items: (section.items ?? []).map(toItem) };
+  }
+  return result;
+}
+
+async function fetchSection(
+  section: Section,
+  page: number,
+  adult: boolean,
+  { types, timeframe }: { types?: string; timeframe?: string } = {},
+) {
+  const params: Record<string, string> =
+    section === "topRated"
+      ? { offset: String(page * PAGE_SIZE), limit: String(PAGE_SIZE) }
+      : { page: String(page) };
+  params.types = types || DEFAULT_TYPES;
+  if (timeframe) params.timeframe = timeframe;
+  if (adult) params.adult = "1";
+  const { items } = await get(
+    `/api/${section === "topRated" ? "home2" : "infinite"}/${section}`,
+    params,
+    true,
+  );
+  return { page, items: (items ?? []).map(toItem) };
+}
+
+async function fetchMangaDetails(id: string) {
+  const [page, all] = await Promise.all([
+    get("/api/manga/page", { id }),
+    get("/api/manga/allChapters", { mangaId: id }).catch(() => null),
+  ]);
+  const manga = page?.mangaPage;
+  if (!manga) throw new HttpError(404, "Manga not found");
+
+  const chapters: any[] = all?.chapters?.length ? all.chapters : (manga.chapters ?? []);
+  const scanlators = new Map<string, string>(
+    (manga.scanlators ?? []).map((scan: any) => [scan.id, scan.name]),
+  );
+
+  return {
+    id: manga.id,
+    title: manga.title,
+    englishTitle: manga.englishTitle || null,
+    altTitles: manga.otherNames || [],
+    synopsis: manga.synopsis || "",
+    type: manga.type,
+    isAdult: manga.isAdult ?? false,
+    status: manga.status || "Unknown",
+    genres: (manga.genres ?? []).map((genre: any) => ({ genre: genre.name, slug: genre.id })),
+    authors: (manga.authors ?? []).map((author: any) => ({
+      author: author.name,
+      slug: author.slug || author.id,
+      role: author.type || "Author",
+    })),
+    scanlators: manga.scanlators || [],
+    poster: image(manga.poster?.image || manga.poster?.id),
+    banner: image(manga.banner?.url),
+    rating: manga.avgRating || null,
+    views: manga.views || null,
+    totalChapters: manga.totalChapterCount || chapters.length,
+    chapters: chapters.map((chapter) => {
+      const scanId = chapter.scanlationMangaId || chapter.scanId || null;
+      return {
+        id: chapter.id,
+        title: chapter.title || `Chapter ${chapter.number}`,
+        number: chapter.number,
+        pages: chapter.pageCount,
+        createdAt: chapter.createdAt,
+        scanId,
+        scanlator: (scanId && scanlators.get(scanId)) || "Unknown",
+      };
+    }),
+  };
+}
+
+async function fetchChapterInfo(id: string) {
+  const info = await get("/api/manga/info", { mangaId: id });
+  if (!info?.id) throw new HttpError(404, "Info not found");
+  return {
+    id: info.id,
+    title: info.title,
+    type: info.type,
+    chapters: (info.chapters ?? []).map((chapter: any) => ({
+      id: chapter.id,
+      title: chapter.title || `Chapter ${chapter.number}`,
+      number: chapter.number,
+      pages: chapter.pageCount,
+      scanId: chapter.scanId,
+    })),
+  };
+}
+
+async function fetchChapterPages(mangaId: string, chapterId: string) {
+  const { readChapter: chapter } = await get("/api/read/chapter", { mangaId, chapterId });
+  if (!chapter) throw new HttpError(404, "Chapter not found");
+  return {
+    id: chapter.id,
+    title: chapter.title,
+    pages: (chapter.pages ?? []).map((page: any) => ({
+      img: image(page.image),
+      page: page.number,
+    })),
+  };
+}
+
+async function fetchFilters() {
+  const data = await get("/api/explore/availableFilters");
+  const options = (entries: any[] = []) =>
+    entries.map((entry) => ({ name: entry.name, slug: entry.id }));
+  return {
+    genres: options(data.genres),
+    types: options(data.types),
+    statuses: options(data.statuses),
+  };
+}
+
+async function explore({ genres, types, statuses, page, adult }: ExploreFilter) {
+  const typeList = list(types);
+  const statusList = list(statuses);
+  const filters = [
+    ...list(genres).map((genre) => `genreIds:=${quote(genre)}`),
+    `type:=[${(typeList.length ? typeList : list(DEFAULT_TYPES)).map(quote).join(",")}]`,
+    ...(statusList.length ? [`status:=[${statusList.map(quote).join(",")}]`] : []),
+    `isAdult:=${adult}`,
+    "views:>0",
+    "hidden:!=true",
+  ];
+  const { hits } = await get("/collections/manga/documents/search", {
+    ...SEARCH,
+    filter_by: filters.join(" && "),
+    page: String(page + 1),
+    per_page: String(PAGE_SIZE),
+  });
+  return { page, items: (hits ?? []).map((hit: any) => toItem(hit.document)) };
+}
+
+async function fetchAuthor(slug: string, page: number, type: string | undefined, adult: boolean) {
+  const data = await get(
+    "/api/browse/author",
+    { authorSlug: slug, page: String(page), ...(type && { type }) },
+    true,
+  );
+  if (!data?.author) throw new HttpError(404, "Author not found");
+  const items: any[] = data.items ?? [];
+  return {
+    author: data.author.name || slug,
+    role: type || "Any",
+    page,
+    items: (adult ? items : items.filter((item) => !item.isAdult)).map(toItem),
+  };
+}
+
+function proxy(request: Request) {
+  return proxyImage(request, `${BASE_URL}/`, (url) => {
+    if (url.hostname === "atsu.moe") url.hostname = "cdn.atsu.moe";
+  });
+}
+
+export const atsu = {
+  parseHome,
+  fetchSection,
+  fetchMangaDetails,
+  fetchChapterInfo,
+  fetchChapterPages,
+  fetchFilters,
+  explore,
+  fetchAuthor,
+  proxy,
+};

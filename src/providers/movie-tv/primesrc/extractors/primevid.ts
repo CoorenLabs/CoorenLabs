@@ -1,137 +1,65 @@
 import { createDecipheriv } from "node:crypto";
-import { languageDictionary } from "../../../../core/helper";
+import { languageName } from "../../../../core/helper";
 import { Logger } from "../../../../core/logger";
-import { USER_AGENT } from "../../../anime/animepahe/scraper";
-import { primevid as baseUrl, primesrc as primesrcOriginUrl } from "../../../origins";
-import type { Caption, Source } from "../types";
+import { primesrc, primevid as baseUrl } from "../../../origins";
+import { BROWSER_HEADERS } from "../constants";
+import type { Caption, Extracted, Source } from "../types";
 
-const algorithm = "aes-128-cbc";
-const key64 = "a2llbXRpZW5tdWE5MTFjYQ==";
-const iv64 = "MTIzNDU2Nzg5MG9pdXl0cg==";
+const KEY = Buffer.from("a2llbXRpZW5tdWE5MTFjYQ==", "base64");
+const IV = Buffer.from("MTIzNDU2Nzg5MG9pdXl0cg==", "base64");
+const HOST = new URL(primesrc).hostname;
+const STREAM_HEADERS = { Referer: `${baseUrl}/` };
 
-const corsHeaders: Record<string, string> = {
-  Referer: `${baseUrl}/`,
-};
+function decrypt(payload: string) {
+  const decipher = createDecipheriv("aes-128-cbc", KEY, IV);
+  const cipher = Buffer.from(payload.replace(/[^a-f0-9]/gi, ""), "hex");
+  return decipher.update(cipher, undefined, "utf8") + decipher.final("utf8");
+}
 
-const primesrc_origin = new URL(primesrcOriginUrl).hostname;
-
-/**
- * Get Direct source from primevid embed url.
- * @param url primevid embed url
- */
-export const extractPrimevid = async (url: string) => {
+export async function extractPrimevid(url: string): Promise<Extracted | undefined> {
   const id = url.split("#")[1];
   if (!id) {
-    Logger.error("[Primevid] id not found from url:", url);
+    Logger.warn("[primevid] no video id in", url);
     return;
   }
 
   try {
-    // const res = await fetch(`${baseUrl}/api/v1/info?id=${id}`);
-    const res = await fetch(`${baseUrl}/api/v1/video?id=${id}&w=1920&h=1080&r=${primesrc_origin}`, {
+    const res = await fetch(`${baseUrl}/api/v1/video?id=${id}&w=1920&h=1080&r=${HOST}`, {
       headers: {
-        accept: "*/*",
-        "accept-language": "en-US,en;q=0.9",
-        priority: "u=1, i",
-        "sec-ch-ua": '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
+        ...BROWSER_HEADERS,
         "sec-fetch-storage-access": "active",
-        Referer: `https://${primesrc_origin}/`,
-
-        // required
-        "user-agent": USER_AGENT,
+        Referer: `https://${HOST}/`,
       },
     });
-
     if (!res.ok) {
-      Logger.error("[Primevid] fetch failed, status code:", res.status);
-      console.log(await res.text());
+      Logger.warn(`[primevid] video request failed (${res.status})`);
       return;
     }
 
-    const rawText = await res.text();
+    const { cf, source, poster, thumbnail, subtitle, streamingConfig } = JSON.parse(
+      decrypt(await res.text()),
+    );
+    const params = JSON.parse(streamingConfig || "{}")?.adjust?.Cloudflare?.params ?? {};
 
-    // stips characters other than hex
-    const cipherBuffer = Buffer.from(rawText.replace(/[^a-f0-9]/gi, ""), "hex");
-
-    const {
-      cf: cfSource,
-      source: fallbackSource,
-      poster,
-      thumbnail,
-      subtitle: subs,
-      streamingConfig,
-    } = JSON.parse(decryptCipher(cipherBuffer) || "");
-
-    const {
-      adjust: {
-        Cloudflare: {
-          params: { t, e },
-        },
-      },
-    } = JSON.parse(streamingConfig);
-
-    const subtitles: Caption[] = [];
-    const sources: Source[] = [];
-
-    for (const [langCode, path] of Object.entries(subs)) {
-      subtitles.push({
-        label: languageDictionary[langCode] || langCode,
-        langCode,
-        url: baseUrl + path,
-        delay: 0,
-      });
-    }
-
-    if (cfSource && cfSource.length > 0) {
-      sources.push({
+    const sources: Source[] = [cf && `${cf}?e=${params.e || ""}&t=${params.t || ""}`, source]
+      .filter(Boolean)
+      .map((streamUrl: string) => ({
         type: "hls",
-        url: cfSource + `?e=${e || ""}&t=${t || ""}`,
+        url: streamUrl,
         dub: "Original Audio",
         poster,
         thumbnail,
-        headers: corsHeaders,
-      });
-    }
-
-    if (fallbackSource && fallbackSource.length > 0) {
-      sources.push({
-        type: "hls",
-        url: fallbackSource,
-        dub: "Original Audio",
-        poster,
-        thumbnail,
-        headers: corsHeaders,
-      });
-    }
+        headers: STREAM_HEADERS,
+      }));
+    const subtitles: Caption[] = Object.entries(subtitle ?? {}).map(([langCode, path]) => ({
+      label: languageName(langCode),
+      langCode,
+      url: baseUrl + path,
+      delay: 0,
+    }));
 
     return { sources, subtitles };
-  } catch (err) {
-    Logger.error("[Primevid] error occured while fetching", err);
+  } catch (error) {
+    Logger.error("[primevid] extraction failed", error);
   }
-};
-
-const decryptCipher = (cipherBuffer: Buffer) => {
-  try {
-    Logger.info("[primevid] Cipher length:", cipherBuffer.length);
-    Logger.info("[primevid] Decrypting");
-
-    const keyBuffer = Buffer.from(key64, "base64");
-    const ivBuffer = Buffer.from(iv64, "base64");
-
-    const decipher = createDecipheriv(algorithm, keyBuffer, ivBuffer);
-
-    let data = decipher.update(cipherBuffer, undefined, "utf8");
-    data += decipher.final("utf8");
-
-    // Logger.info(JSON.parse(data));
-
-    return data;
-  } catch (err) {
-    Logger.error("[primevid] error occured while decrypting cipher:", err);
-  }
-};
+}

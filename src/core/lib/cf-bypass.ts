@@ -1,142 +1,56 @@
-export const cf_captcha_status = [403, 503, 429];
-export const cf_signatures = [
-  "window._cf_chl_opt",
-  "<title>Just a moment...</title>",
-  "<title>Attention Required! | Cloudflare</title>",
-  'id="challenge-form"',
-  "__cf_chl_tk",
-];
-
-import { connect } from "puppeteer-real-browser";
 import { Logger } from "../logger";
+import { type Page, withPage } from "./browser";
 
-interface ClearanceResult {
-  success: boolean;
-  cfClearance?: string;
-  userAgent?: string;
-  ttl?: number;
-  allCookies?: any[];
-  error?: string;
-}
+type Solved = { cfClearance: string; userAgent: string; ttl: number };
+type Clearance = ({ success: true } & Solved) | { success: false; error: string };
 
 const TIMEOUT = 15_000;
+const POLL_INTERVAL = 250;
+const FALLBACK_TTL = 3600;
+const CHALLENGE_TITLES = ["Just a moment", "Cloudflare", "Attention Required"];
 
-let browserInstance: any = null;
-let pageInstance: any = null;
+function waitForClearance(page: Page): Promise<Solved> {
+  return new Promise((resolve, reject) => {
+    const poll = setInterval(async () => {
+      try {
+        const title: string | null = await page.evaluate(() => document.title).catch(() => null);
+        if (title === null || CHALLENGE_TITLES.some((marker) => title.includes(marker))) return;
 
-let bypassQueue: Promise<void> = Promise.resolve();
+        const cookie = (await page.cookies()).find((c) => c.name === "cf_clearance");
+        if (!cookie) return;
+        const userAgent: string = await page.evaluate(() => navigator.userAgent);
 
-export async function getCloudflareClearance(targetUrl: string): Promise<ClearanceResult> {
-  let releaseLock: () => void;
-  const nextInLine = new Promise<void>((resolve) => {
-    releaseLock = resolve;
+        clearInterval(poll);
+        clearTimeout(timer);
+        const remaining = Math.floor(cookie.expires - Date.now() / 1000);
+        resolve({
+          cfClearance: cookie.value,
+          userAgent,
+          ttl: cookie.expires > 0 && remaining > 0 ? remaining : FALLBACK_TTL,
+        });
+      } catch {
+        return;
+      }
+    }, POLL_INTERVAL);
+
+    const timer = setTimeout(() => {
+      clearInterval(poll);
+      reject(new Error("Timed out waiting for the cf_clearance cookie"));
+    }, TIMEOUT);
   });
+}
 
-  const waitForPrevious = bypassQueue;
-  bypassQueue = bypassQueue.then(() => nextInLine);
-
-  await waitForPrevious;
-
+export async function getCloudflareClearance(targetUrl: string): Promise<Clearance> {
   try {
-    if (
-      !browserInstance ||
-      !browserInstance.isConnected() ||
-      !pageInstance ||
-      pageInstance.isClosed()
-    ) {
-      Logger.info("Cold start: Launching persistent browser...");
-      if (browserInstance) await browserInstance.close().catch(() => {});
-
-      const { browser, page } = await connect({
-        headless: false,
-        turnstile: true,
-        disableXvfb: false,
-        ignoreAllFlags: false,
-      });
-
-      browserInstance = browser;
-      pageInstance = page;
-    }
-
-    Logger.info(`Navigating to ${targetUrl}...`);
-    await pageInstance.goto(targetUrl, { waitUntil: "domcontentloaded" });
-
-    const extractionData = await new Promise<{
-      cookies: any[];
-      cfClearance: string;
-      userAgent: string;
-      ttl: number;
-    }>((resolve, reject) => {
-      // eslint-disable-next-line prefer-const
-      let checkInterval: NodeJS.Timeout;
-
-      const timeoutId = setTimeout(() => {
-        clearInterval(checkInterval);
-        reject(new Error("Timeout: cf_clearance cookie never appeared."));
-      }, TIMEOUT);
-
-      checkInterval = setInterval(async () => {
-        try {
-          if (pageInstance.isClosed()) return;
-
-          // THE REAL FIX: Ignore the stale cookie while the CF challenge is still rendering
-          const title = await pageInstance.evaluate(() => document.title).catch(() => "");
-          if (
-            title.includes("Just a moment") ||
-            title.includes("Cloudflare") ||
-            title.includes("Attention Required")
-          ) {
-            return; // Keep looping, do not resolve yet
-          }
-
-          const cookies = await pageInstance.cookies();
-          const cfCookie = cookies.find((c: any) => c.name === "cf_clearance");
-
-          if (cfCookie) {
-            let userAgent = "";
-            try {
-              userAgent = await pageInstance.evaluate((): string => navigator.userAgent);
-            } catch (_err) {
-              return;
-            }
-
-            clearInterval(checkInterval);
-            clearTimeout(timeoutId);
-
-            let ttlSeconds = 3600;
-            if (cfCookie.expires && cfCookie.expires > 0) {
-              const currentUnixTime = Math.floor(Date.now() / 1000);
-              ttlSeconds = Math.floor(cfCookie.expires) - currentUnixTime;
-              if (ttlSeconds <= 0) ttlSeconds = 3600;
-            }
-
-            resolve({
-              cookies,
-              cfClearance: cfCookie.value,
-              userAgent,
-              ttl: ttlSeconds,
-            });
-          }
-        } catch (_err) {
-          // Suppress rapid-reload context errors
-        }
-      }, 50);
+    const clearance = await withPage(async (page) => {
+      await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+      return waitForClearance(page);
     });
-
-    Logger.info(`Got the cookie! TTL is ${extractionData.ttl} seconds.`);
-
-    return {
-      success: true,
-      cfClearance: extractionData.cfClearance,
-      userAgent: extractionData.userAgent,
-      ttl: extractionData.ttl,
-      allCookies: extractionData.cookies,
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-    console.error("Failed to bypass:", errorMessage);
-    return { success: false, error: errorMessage };
-  } finally {
-    releaseLock!();
+    Logger.info(`[cf-bypass] Cleared ${new URL(targetUrl).host}`);
+    return { success: true, ...clearance };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    Logger.warn(`[cf-bypass] ${new URL(targetUrl).host}: ${error}`);
+    return { success: false, error };
   }
 }

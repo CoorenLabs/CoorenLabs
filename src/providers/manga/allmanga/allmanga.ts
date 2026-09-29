@@ -1,452 +1,447 @@
-import axios, { AxiosInstance } from "axios";
+import { createHash } from "node:crypto";
+import { Cache } from "../../../core/cache";
+import { type Page, withPage } from "../../../core/lib/browser";
 import { Logger } from "../../../core/logger";
+import {
+  allmanga as BASE_URL,
+  allmanga_api as API_URL,
+  allmanga_reader as READER_URL,
+} from "../../origins";
+import { getJson, HttpError, imageUrl, proxyImage, USER_AGENT } from "../shared";
 
-// ─── Constants & CDNs ──────────────────────────────────────────────────────
-
-const ALLMANGA_CDN_HOSTS = [
-  "https://wp.youtube-anime.com/aln.youtube-anime.com",
-  "https://wp.youtube-anime.com",
-  "https://aln.youtube-anime.com",
-];
-
-import { allmanga as BASE_URL, allmanga_api as API_URL } from "../../origins";
-
-const DEFAULT_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-  Referer: `${BASE_URL}/`,
-  Origin: BASE_URL,
-  Accept: "application/json",
+const PROVIDER = "allmanga";
+const LABEL = "AllManga";
+const CDN = "https://wp.youtube-anime.com/aln.youtube-anime.com";
+const HOME_TTL = 1800;
+const READ_TTL = 86400;
+const READ_TIMEOUT = 25_000;
+const EMPTY_GRACE = 5_000;
+const COLLECT_TIMEOUT = 5_000;
+const POLL_INTERVAL = 200;
+const CHAPTER_PART = /^[\w.-]+$/;
+const TAGS_PER_PAGE = 100;
+const HEADERS = { "User-Agent": USER_AGENT, Referer: `${BASE_URL}/`, Origin: BASE_URL };
+const PERIODS: Record<string, number> = { daily: 1, weekly: 7, monthly: 30, all: 0 };
+const ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
 };
 
-// ─── Helper Functions ──────────────────────────────────────────────────────
+const CARD = "_id name englishName nativeName thumbnail score availableChapters";
+const QUERIES = {
+  popular: `query($type:VaildPopularTypeEnumType!,$size:Int!,$dateRange:Int,$page:Int,$allowAdult:Boolean,$allowUnknown:Boolean){queryPopular(type:$type,size:$size,dateRange:$dateRange,page:$page,allowAdult:$allowAdult,allowUnknown:$allowUnknown){total recommendations{anyCard{${CARD}}}}}`,
+  search: `query($search:SearchInput,$limit:Int,$page:Int,$translationType:VaildTranslationTypeMangaEnumType,$countryOrigin:VaildCountryOriginEnumType){mangas(search:$search,limit:$limit,page:$page,translationType:$translationType,countryOrigin:$countryOrigin){pageInfo{total}edges{${CARD}}}}`,
+  random: `query($format:String!){queryRandomRecommendation(format:$format){${CARD}}}`,
+  tags: `query($page:Int,$limit:Int,$search:TagSearchInput){queryTags(page:$page,limit:$limit,search:$search){pageInfo{total}edges{name slug tagType mangaCount}}}`,
+  tagList: `query($search:ListForTagInput!){queryListForTag(search:$search){edges{${CARD}}}}`,
+  manga: `query($_id:String!){manga(_id:$_id){_id name englishName nativeName thumbnail description authors genres status availableChapters availableChaptersDetail airedStart airedEnd}}`,
+};
 
-function decodeHTMLEntities(text: string): string {
-  const entities: Record<string, string> = {
-    "&amp;": "&",
-    "&lt;": "<",
-    "&gt;": ">",
-    "&quot;": '"',
-    "&apos;": "'",
-    "&nbsp;": " ",
-  };
-  return text.replace(/&([^;]+);/g, (match, entity) => {
-    if (entities[match]) return entities[match];
-    if (entity.startsWith("#x")) return String.fromCharCode(parseInt(entity.slice(2), 16));
-    if (entity.startsWith("#")) return String.fromCharCode(parseInt(entity.slice(1), 10));
-    return match;
+type Query = keyof typeof QUERIES;
+type GraphQLResponse = { data?: any; errors?: { message?: string }[] };
+type Tag = { name: string; slug: string; tagType: string | null; mangaCount: number };
+type Clearance = Parameters<ReturnType<Page["browserContext"]>["setCookie"]>[0];
+
+const HASHES = Object.fromEntries(
+  Object.entries(QUERIES).map(([name, query]) => [
+    name,
+    createHash("sha256").update(query).digest("hex"),
+  ]),
+) as Record<Query, string>;
+
+const reading = new Map<string, Promise<string[]>>();
+let clearance: Clearance | null = null;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function gql(name: Query, variables: Record<string, unknown>) {
+  const query = QUERIES[name];
+  const extensions = { persistedQuery: { version: 1, sha256Hash: HASHES[name] } };
+  const params = new URLSearchParams({
+    variables: JSON.stringify(variables),
+    extensions: JSON.stringify(extensions),
+  });
+  let body = await getJson<GraphQLResponse>(LABEL, `${API_URL}?${params}`, { headers: HEADERS });
+  if (body.errors?.some((error) => error.message === "PersistedQueryNotFound")) {
+    body = await getJson<GraphQLResponse>(LABEL, API_URL, {
+      method: "POST",
+      headers: { ...HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables, extensions }),
+    });
+  }
+  const messages = body.errors?.map((error) => error.message).join("; ");
+  if (messages?.includes("NEED_CAPTCHA")) {
+    throw new HttpError(503, "AllManga requires captcha verification for this request");
+  }
+  if (messages && /too many requests/i.test(messages)) {
+    throw new HttpError(503, "AllManga is rate limiting requests, try again shortly");
+  }
+  if (messages) throw new HttpError(502, `AllManga API error: ${messages}`);
+  return body.data ?? {};
+}
+
+function clean(text?: string | null) {
+  return (text ?? "")
+    .replace(/<[^>]*>?/g, " ")
+    .replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+      if (entity[0] !== "#") return ENTITIES[entity.toLowerCase()] ?? match;
+      const code = /x/i.test(entity[1]) ? parseInt(entity.slice(2), 16) : +entity.slice(1);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : match;
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cover(thumbnail?: string | null) {
+  if (!thumbnail) return null;
+  const url = /^https?:\/\//.test(thumbnail)
+    ? thumbnail
+    : `${CDN}/${thumbnail.replace(/^\/+/, "")}?w=250`;
+  return imageUrl(PROVIDER, url);
+}
+
+function toCards(list: any[] = []) {
+  return list.map((item) => {
+    const card = item.anyCard ?? item;
+    return {
+      id: card._id,
+      title: clean(card.name),
+      englishTitle: clean(card.englishName),
+      nativeTitle: clean(card.nativeName),
+      cover: cover(card.thumbnail),
+      score: card.score,
+      availableChapters: card.availableChapters || { sub: 0, raw: 0 },
+    };
   });
 }
 
-function cleanText(text: string): string {
-  if (!text) return "";
-  let cleaned = text.replace(/<[^>]*>?/gm, "");
-  cleaned = decodeHTMLEntities(cleaned);
-  return cleaned.replace(/\s+/g, " ").trim();
+async function fetchTags(search: Record<string, unknown>, page = 1, limit?: number) {
+  const { queryTags } = await gql("tags", { search: { format: "manga", ...search }, page, limit });
+  return { total: queryTags?.pageInfo?.total ?? 0, tags: (queryTags?.edges ?? []) as Tag[] };
 }
 
-function proxyImage(url: string, baseApiUrl: string): string {
-  if (!url || !baseApiUrl) return url;
-  const root = baseApiUrl.replace(/\/$/, "");
-  let targetUrl = url;
-
-  if (!url.startsWith("http")) {
-    const cleanPath = url.replace(/^\/+/, "");
-    targetUrl = `${ALLMANGA_CDN_HOSTS[0]}/${cleanPath}?w=250`;
+async function parsePopular(page = 1, size = 20, period = "daily") {
+  if (!Object.hasOwn(PERIODS, period)) {
+    throw new HttpError(400, "Query parameter 'period' must be one of daily, weekly, monthly, all");
   }
-
-  const path = targetUrl.replace(/^https?:\/\//, "");
-  return `${root}/image/${path}`;
+  const { queryPopular } = await gql("popular", {
+    type: "manga",
+    size,
+    dateRange: PERIODS[period],
+    page,
+    allowAdult: false,
+    allowUnknown: false,
+  });
+  return {
+    provider: LABEL,
+    total: queryPopular?.total || 0,
+    page,
+    period,
+    results: toCards(queryPopular?.recommendations),
+  };
 }
 
-// ─── Scraper Class ─────────────────────────────────────────────────────────
+async function parseSearch(query: string, page = 1, filters: Record<string, unknown> = {}) {
+  const { mangas } = await gql("search", {
+    search: {
+      isManga: true,
+      allowAdult: false,
+      allowUnknown: false,
+      ...filters,
+      ...(query && { query }),
+    },
+    limit: 26,
+    page,
+    translationType: "sub",
+    countryOrigin: "ALL",
+  });
+  return {
+    provider: LABEL,
+    total: mangas?.pageInfo?.total || 0,
+    page,
+    results: toCards(mangas?.edges),
+  };
+}
 
-export class AllMangaParser {
-  private http: AxiosInstance;
+async function parseRandom() {
+  const { queryRandomRecommendation } = await gql("random", { format: "manga" });
+  return { provider: LABEL, results: toCards(queryRandomRecommendation) };
+}
 
-  constructor() {
-    this.http = axios.create({
-      headers: DEFAULT_HEADERS,
-      timeout: 15000,
-    });
+async function parseTags(page = 1) {
+  const { total, tags } = await fetchTags({}, page, TAGS_PER_PAGE);
+  return {
+    provider: LABEL,
+    total,
+    page,
+    tags: tags.map((tag) => ({
+      name: tag.name,
+      slug: tag.slug,
+      type: tag.tagType || "genre",
+      count: tag.mangaCount,
+    })),
+  };
+}
+
+async function taggedManga({ slug, name, tagType }: Tag) {
+  const { queryListForTag } = await gql("tagList", {
+    search: { slug, format: "manga", tagType: tagType ?? null, name },
+  });
+  return { results: toCards(queryListForTag?.edges) };
+}
+
+async function buildHome() {
+  const year = new Date().getFullYear();
+  const section = (id: string, title: string, task: Promise<{ results: unknown[] }>) =>
+    task.then(({ results }) => ({ id, title, items: results }));
+
+  const tagSections = fetchTags({ queryType: "Home" }).then(({ tags }) =>
+    Promise.allSettled(tags.map((tag) => section(tag.slug, tag.name, taggedManga(tag)))),
+  );
+  const core = await Promise.allSettled([
+    section("popular-daily", "Popular Manga (Daily)", parsePopular(1, 15, "daily")),
+    section("latest", "Latest Updates", parseSearch("", 1)),
+    section(`manga-${year}`, `Manga ${year}`, parseSearch("", 1, { year })),
+    section("random", "Random Recommendations", parseRandom()),
+  ]);
+  const tagged = await tagSections.catch(() => []);
+
+  const sections = [...core, ...tagged].flatMap((result) =>
+    result.status === "fulfilled" && result.value.items.length ? [result.value] : [],
+  );
+  if (!sections.length) throw new HttpError(502, "AllManga home is unavailable");
+  return { provider: LABEL, sections };
+}
+
+async function parseHome() {
+  return (await Cache.remember("allmanga:home", HOME_TTL, buildHome)).data;
+}
+
+async function parseDetail(id: string) {
+  const { manga } = await gql("manga", { _id: id });
+  if (!manga) throw new HttpError(404, "Manga not found");
+  const chapters: string[] = [...(manga.availableChaptersDetail?.sub ?? [])].sort(
+    (a, b) => Number(b) - Number(a),
+  );
+  return {
+    provider: LABEL,
+    id: manga._id,
+    title: clean(manga.name),
+    englishTitle: clean(manga.englishName),
+    nativeTitle: clean(manga.nativeName),
+    cover: cover(manga.thumbnail),
+    description: clean(manga.description),
+    genres: (manga.genres ?? []).map((genre: string) => ({ genre, slug: genre })),
+    authors: (manga.authors ?? []).map((author: string) => ({ author, slug: author })),
+    status: manga.status || "Unknown",
+    totalChapters: manga.availableChapters?.sub || 0,
+    rawChapters: manga.availableChapters?.raw || 0,
+    airedStart: manga.airedStart,
+    airedEnd: manga.airedEnd,
+    chapterList: chapters.map((chapter) => ({
+      id: `${manga._id}:sub:${chapter}`,
+      number: Number(chapter),
+      title: `Chapter ${chapter}`,
+      lang: "sub",
+    })),
+  };
+}
+
+function apiErrors(body: string) {
+  try {
+    const { errors } = JSON.parse(body) as GraphQLResponse;
+    return errors?.map((error) => error.message).join("; ") ?? "";
+  } catch {
+    return "";
   }
+}
 
-  private async apqRequest(variables: Record<string, any>, sha256Hash: string) {
-    try {
-      const extensions = {
-        persistedQuery: { version: 1, sha256Hash: sha256Hash },
-      };
-
-      const response = await this.http.get(API_URL, {
-        params: {
-          variables: JSON.stringify(variables),
-          extensions: JSON.stringify(extensions),
-        },
-      });
-      return response.data;
-    } catch (error: any) {
-      Logger.error(`AllManga API Error: ${error.message}`);
-      throw new Error("Failed to fetch data from AllManga API", { cause: error });
+function watchChapter(page: Page, path: string) {
+  const chapter = {
+    reached: false,
+    answeredAt: 0,
+    status: 0,
+    error: "",
+    retryAt: 0,
+    captcha: false,
+  };
+  page.on("response", (response) => {
+    const request = response.request();
+    if (request.resourceType() === "document") {
+      if (response.ok() && response.url().startsWith(READER_URL)) chapter.reached = true;
+      return;
     }
-  }
-
-  private formatMangaList(rawList: any[], baseApiUrl: string) {
-    return rawList.map((item: any) => {
-      const card = item.anyCard || item;
-      return {
-        id: cleanText(card._id),
-        title: cleanText(card.name),
-        englishTitle: cleanText(card.englishName),
-        nativeTitle: cleanText(card.nativeName),
-        cover: proxyImage(card.thumbnail, baseApiUrl),
-        score: card.score,
-        availableChapters: card.availableChapters || { sub: 0, raw: 0 },
-      };
-    });
-  }
-
-  // ─── Endpoints ──────────────────────────────────────────────────────
-
-  async parsePopular(
-    baseApiUrl: string,
-    page = 1,
-    size = 20,
-    period = "daily",
-  ): Promise<Record<string, unknown>> {
-    try {
-      let dateRange = 1;
-      if (period === "weekly") dateRange = 7;
-      if (period === "monthly") dateRange = 30;
-      if (period === "all") dateRange = 0;
-
-      const variables = {
-        type: "manga",
-        size: size,
-        dateRange: dateRange,
-        page: page,
-        allowAdult: false,
-        allowUnknown: false,
-      };
-      const hash = "60f50b84bb545fa25ee7f7c8c0adbf8f5cea40f7b1ef8501cbbff70e38589489";
-      const data = await this.apqRequest(variables, hash);
-      const rawList = data?.data?.queryPopular?.recommendations || [];
-
-      return {
-        provider: "AllManga",
-        total: data?.data?.queryPopular?.total || 0,
-        page: page,
-        period: period,
-        results: this.formatMangaList(rawList, baseApiUrl),
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async parseSearch(
-    query: string,
-    baseApiUrl: string,
-    page = 1,
-    extraSearchArgs: any = {},
-  ): Promise<Record<string, unknown>> {
-    try {
-      // FIX: Only inject the query string if it actually exists!
-      const searchObj: any = {
-        isManga: true,
-        allowAdult: false,
-        allowUnknown: false,
-        ...extraSearchArgs,
-      };
-      if (query) {
-        searchObj.query = query;
-      }
-
-      const variables = {
-        search: searchObj,
-        limit: 26,
-        page: page,
-        translationType: "sub",
-        countryOrigin: "ALL",
-      };
-
-      const hash = "2d48e19fb67ddcac42fbb885204b6abb0a84f406f15ef83f36de4a66f49f651a";
-      const data = await this.apqRequest(variables, hash);
-      const rawList = data?.data?.mangas?.edges || [];
-
-      return {
-        provider: "AllManga",
-        total: data?.data?.mangas?.pageInfo?.total || 0,
-        page: page,
-        results: this.formatMangaList(rawList, baseApiUrl),
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async parseRandom(baseApiUrl: string): Promise<Record<string, unknown>> {
-    try {
-      const variables = { format: "manga", allowAdult: false };
-      const hash = "2ad2035e21ca17b8f8bab8e7e879be875cdd4ff4a1bdd89228b50e84ac1425d5";
-      const data = await this.apqRequest(variables, hash);
-      const rawList = data?.data?.queryRandomRecommendation || [];
-
-      return { provider: "AllManga", results: this.formatMangaList(rawList, baseApiUrl) };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async parseTags(): Promise<Record<string, unknown>> {
-    try {
-      const variables = { search: { format: "manga", queryType: "Home" }, page: 1 };
-      const hash = "fbd24de3aec73d35332185b621beec15396aaf8e8ae00183ddac6c19fbf8adcf";
-      const data = await this.apqRequest(variables, hash);
-      const rawList = data?.data?.queryTags?.edges || [];
-
-      const tags = rawList.map((item: any) => ({
-        name: item.name,
-        slug: item.slug,
-        type: item.tagType || "genre",
-        count: item.mangaCount,
-      }));
-
-      return { provider: "AllManga", tags };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async parseTagList(
-    slug: string,
-    name: string,
-    tagType: string | null,
-    baseApiUrl: string,
-  ): Promise<Record<string, unknown>> {
-    try {
-      const variables = { search: { slug: slug, format: "manga", tagType: tagType, name: name } };
-      const hash = "ff61a63ff776f334f80c1e6ad1aa49ef71eab831e235e5d6ec679eae5b83450f";
-      const data = await this.apqRequest(variables, hash);
-      const rawList = data?.data?.queryListForTag?.edges || [];
-
-      return {
-        provider: "AllManga",
-        tag: name,
-        results: this.formatMangaList(rawList, baseApiUrl),
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async parseHome(baseApiUrl: string): Promise<Record<string, unknown>> {
-    try {
-      const tags = [
-        { slug: "pegging", name: "Pegging", type: null },
-        { slug: "ga_bunko_magazine-magazine", name: "GA Bunko Magazine", type: "magazine" },
-        { slug: "ganma_-magazine", name: "Ganma!", type: "magazine" },
-        { slug: "tournament_s", name: "Tournament/s", type: null },
-        { slug: "shounen_jump_weekly_-magazine", name: "Shounen Jump (Weekly)", type: "magazine" },
-        { slug: "bunshun_online-magazine", name: "Bunshun Online", type: "magazine" },
-        { slug: "based_on_a_visual_novel", name: "Based on a Visual Novel", type: null },
-        { slug: "crafting", name: "Crafting", type: null },
-        { slug: "4_koma", name: "4-koma", type: null },
-        { slug: "young_animal-magazine", name: "Young Animal", type: "magazine" },
-        { slug: "depression", name: "Depression", type: null },
-        { slug: "transformation_s", name: "Transformation/s", type: null },
-        { slug: "beast_girl_s", name: "Beast Girl/s", type: null },
-        {
-          slug: "advanced_knowledge_meets_archaic_world",
-          name: "Advanced Knowledge Meets Archaic World",
-          type: null,
-        },
-        { slug: "anachronism", name: "Anachronism", type: null },
-        { slug: "beautiful_love_interest_s", name: "Beautiful Love Interest/s", type: null },
-        { slug: "disowned_child", name: "Disowned Child", type: null },
-        { slug: "magazine_pocket-magazine", name: "Magazine pocket", type: "magazine" },
-      ];
-
-      const corePromises = [
-        this.parsePopular(baseApiUrl, 1, 15, "daily").then((res) => ({
-          id: "popular-daily",
-          title: "Popular Manga (Daily)",
-          items: (res as any).results || [],
-        })),
-        this.parseSearch("", baseApiUrl, 1).then((res) => ({
-          id: "latest",
-          title: "Latest Updates",
-          items: (res as any).results || [],
-        })),
-        this.parseSearch("", baseApiUrl, 1, { year: 2026 }).then((res) => ({
-          id: "manga-2026",
-          title: "Manga 2026",
-          items: (res as any).results || [],
-        })),
-        this.parseRandom(baseApiUrl).then((res) => ({
-          id: "random",
-          title: "Random Recommendations",
-          items: (res as any).results || [],
-        })),
-      ];
-
-      const tagPromises = tags.map((t) =>
-        this.parseTagList(t.slug, t.name, t.type, baseApiUrl).then((res) => ({
-          id: t.slug,
-          title: t.name,
-          items: (res as any).results || [],
-        })),
-      );
-
-      const allResults = await Promise.allSettled([...corePromises, ...tagPromises]);
-
-      const sections = allResults
-        .filter((res): res is PromiseFulfilledResult<any> => res.status === "fulfilled")
-        .map((res) => res.value)
-        .filter((section) => section.items.length > 0);
-
-      return {
-        provider: "AllManga",
-        sections: sections,
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async parseDetail(id: string, baseApiUrl: string): Promise<Record<string, unknown>> {
-    try {
-      const variables = {
-        mangaId: id,
-        translationType: "sub",
-        chapterString: "1",
-        limit: 1,
-        offset: 0,
-      };
-      const hash = "a062f1b131dae3d17c1950fad14640d066b988ac10347ed49cfbe70f5e7f661b";
-      const data = await this.apqRequest(variables, hash);
-
-      const mangaInfo = data?.data?.chapterPages?.manga;
-      if (!mangaInfo) throw new Error("Manga not found");
-
-      const pageUrl = `${BASE_URL}/manga/${id}`;
-      const pageHtml = await this.http.get(pageUrl).then((res) => res.data);
-
-      const descMatch = pageHtml.match(/<div class="article-description">([\s\S]*?)<\/div>/);
-      const description = descMatch ? cleanText(descMatch[1]) : "";
-
-      const coverMatch = pageHtml.match(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/i);
-      const rawCover = coverMatch ? coverMatch[1] : mangaInfo.thumbnail;
-      const coverUrl = proxyImage(rawCover, baseApiUrl);
-
-      const genreMatches = Array.from(pageHtml.matchAll(/href="\/search-manga\?genres=([^"]+)"/g));
-      const rawGenres = [...new Set(genreMatches.map((m: any) => decodeURIComponent(m[1])))];
-      const genresArray = rawGenres.map((g) => ({
-        genre: cleanText(g),
-        slug: g,
-      }));
-
-      const authorMatches = Array.from(
-        pageHtml.matchAll(/href="\/search-manga\?authors=([^"]+)"/g),
-      );
-      const rawAuthors = [...new Set(authorMatches.map((m: any) => decodeURIComponent(m[1])))];
-      const authorsArray = rawAuthors.map((a) => ({
-        author: cleanText(a),
-        slug: a,
-      }));
-
-      const totalSub = mangaInfo.availableChapters?.sub || 0;
-
-      const chapterList = Array.from({ length: totalSub }, (_, i) => {
-        const chapterNumber = totalSub - i;
-        return {
-          id: `${id}:sub:${chapterNumber}`,
-          number: chapterNumber,
-          title: `Chapter ${chapterNumber}`,
-          lang: "sub",
-        };
-      });
-
-      return {
-        provider: "AllManga",
-        id: mangaInfo._id,
-        title: cleanText(mangaInfo.name),
-        englishTitle: cleanText(mangaInfo.englishName),
-        nativeTitle: cleanText(mangaInfo.nativeName),
-        cover: coverUrl,
-        description: description,
-        genres: genresArray,
-        authors: authorsArray,
-        status: pageHtml.includes("Status:</dt>") ? "Ongoing" : "Unknown",
-        totalChapters: totalSub,
-        rawChapters: mangaInfo.availableChapters?.raw || 0,
-        airedStart: mangaInfo.airedStart,
-        airedEnd: mangaInfo.airedEnd,
-        chapterList: chapterList,
-      };
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }
-
-  async parseRead(chapterId: string, baseApiUrl: string): Promise<Record<string, unknown>> {
-    try {
-      const parts = chapterId.split(":");
-      const mangaId = parts[0];
-      const translationType = parts[1] || "sub";
-      const chapterString = parts[2] || "1";
-
-      const variables = {
-        mangaId: mangaId,
-        translationType: translationType,
-        chapterString: chapterString,
-        limit: 10,
-        offset: 0,
-      };
-      const hash = "a062f1b131dae3d17c1950fad14640d066b988ac10347ed49cfbe70f5e7f661b";
-      const data = await this.apqRequest(variables, hash);
-
-      const edges = data?.data?.chapterPages?.edges || [];
-      if (!edges.length) throw new Error("Chapter pages not found");
-
-      const source = edges[0];
-      const head = source.pictureUrlHead || ALLMANGA_CDN_HOSTS[0];
-
-      const pages = source.pictureUrls.map((page: any) => {
-        let url = page.url;
-        if (!url.startsWith("http")) {
-          url = `${head.replace(/\/$/, "")}/${url.replace(/^\/+/, "")}`;
+    if (!["fetch", "xhr"].includes(request.resourceType())) return;
+    if (!`${request.url()} ${request.postData() ?? ""}`.includes("chapterString")) return;
+    void response.text().then(
+      (body) => {
+        const error = apiErrors(body);
+        if (body.includes("NEED_CAPTCHA")) {
+          if (!chapter.captcha) Logger.warn(`[${LABEL}] ${path}: reader requested captcha`);
+          chapter.captcha = true;
+        } else if (/too many requests/i.test(error)) {
+          const seconds = Number(/(\d+)\s*second/i.exec(error)?.[1] ?? 3);
+          chapter.retryAt = Date.now() + (seconds + Math.random()) * 1000;
+          Logger.debug(`[${LABEL}] ${path}: rate limited, reloading in ${seconds}s`);
+        } else {
+          chapter.status = response.status();
+          chapter.error = error;
+          chapter.answeredAt ||= Date.now();
         }
-        return {
-          page: page.num + 1,
-          img: proxyImage(url, baseApiUrl),
-        };
-      });
+      },
+      () => undefined,
+    );
+  });
+  return chapter;
+}
 
-      return { provider: "AllManga", id: chapterId, pages: pages };
-    } catch (err: any) {
-      return { error: err.message };
+async function waitForSlots(
+  page: Page,
+  chapter: ReturnType<typeof watchChapter>,
+  deadline: number,
+) {
+  let slots = 0;
+  while (Date.now() < deadline) {
+    await sleep(POLL_INTERVAL);
+    if (chapter.retryAt && Date.now() >= chapter.retryAt) {
+      chapter.retryAt = 0;
+      const timeout = Math.max(deadline - Date.now(), 1_000);
+      await page.reload({ waitUntil: "domcontentloaded", timeout }).catch(() => undefined);
+      continue;
+    }
+    const count = await page
+      .evaluate(() => document.querySelectorAll(".reader-page").length)
+      .catch(() => null);
+    if (count === null) continue;
+    if (count && count === slots) return;
+    slots = count;
+    if (!slots && chapter.answeredAt && Date.now() - chapter.answeredAt > EMPTY_GRACE) {
+      if (chapter.error) throw new HttpError(502, `AllManga API error: ${chapter.error}`);
+      throw chapter.status < 400
+        ? new HttpError(404, "Chapter pages not found")
+        : new HttpError(502, `AllManga reader responded with HTTP ${chapter.status}`);
     }
   }
+  if (!chapter.reached) {
+    clearance = null;
+    throw new HttpError(503, "AllManga reader verification did not complete");
+  }
+  if (chapter.retryAt) {
+    throw new HttpError(503, "AllManga is rate limiting chapter requests, try again shortly");
+  }
+  if (chapter.captcha) {
+    throw new HttpError(503, "AllManga requires captcha verification for this request");
+  }
+  throw new HttpError(504, "AllManga reader timed out");
+}
 
-  async proxyImage(targetUrl: string): Promise<any> {
-    try {
-      const res = await this.http.get(targetUrl, {
-        responseType: "arraybuffer",
-        headers: {
-          Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-          Referer: "https://allmanga.to/",
-        },
-      });
-      return {
-        success: true,
-        contentType: res.headers["content-type"] || "image/jpeg",
-        content: res.data,
-      };
-    } catch (err: any) {
-      Logger.error(`AllManga Image Proxy Error: ${err.message}`);
-      return { success: false, status: err.response?.status || 500, error: err.message };
+async function keepClearance(page: Page) {
+  const cookies = await page
+    .browserContext()
+    .cookies()
+    .catch(() => []);
+  const cookie = cookies.find((item) => item.name === "cf_clearance");
+  if (!cookie) return;
+  const { name, value, domain, path, expires, httpOnly, secure, sameSite } = cookie;
+  clearance = { name, value, domain, path, expires, httpOnly, secure, sameSite };
+}
+
+function collectPages(page: Page, timeout: number) {
+  return page.evaluate(async (limit: number) => {
+    const until = Date.now() + limit;
+    const source = (slot: Element) => {
+      const src = slot.querySelector("img")?.src ?? "";
+      return /^https?:\/\//.test(src) ? src : "";
+    };
+    const urls: string[] = [];
+    for (const slot of document.querySelectorAll(".reader-page")) {
+      while (!source(slot) && Date.now() < until) {
+        slot.scrollIntoView({ block: "start" });
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      urls.push(source(slot));
     }
+    return urls;
+  }, timeout);
+}
+
+async function capture(page: Page, path: string) {
+  const started = Date.now();
+  const deadline = started + READ_TIMEOUT;
+  const chapter = watchChapter(page, path);
+  if (clearance && clearance.expires > started / 1000) {
+    await page.browserContext().setCookie(clearance);
+  }
+  await page.goto(`${READER_URL}${path}`, { waitUntil: "domcontentloaded", timeout: READ_TIMEOUT });
+
+  try {
+    await waitForSlots(page, chapter, deadline);
+  } finally {
+    if (chapter.reached) await keepClearance(page);
+  }
+
+  const urls = await collectPages(page, Math.max(deadline - Date.now(), COLLECT_TIMEOUT));
+  if (!urls.length || urls.some((url) => !url)) {
+    throw new HttpError(502, "AllManga reader returned incomplete pages");
+  }
+  Logger.info(`[${LABEL}] ${path}: ${urls.length} pages in ${Date.now() - started}ms`);
+  return urls;
+}
+
+async function readChapter(path: string) {
+  try {
+    return await withPage((page) => capture(page, path));
+  } catch (err) {
+    const error =
+      err instanceof HttpError
+        ? err
+        : new HttpError(
+            (err as Error).name === "TimeoutError" ? 504 : 502,
+            "AllManga reader is unavailable",
+          );
+    if (error.status !== 404) Logger.warn(`[${LABEL}] ${path}: ${(err as Error).message}`);
+    throw error;
   }
 }
 
-export const allmanga = new AllMangaParser();
+async function parseRead(chapterId: string) {
+  const [mangaId, translationType = "sub", chapterString = "1"] = chapterId.split(":");
+  const parts = [mangaId, translationType, chapterString];
+  if (!parts.every((part) => CHAPTER_PART.test(part))) {
+    throw new HttpError(400, "Invalid chapter id");
+  }
+  const key = parts.join(":");
+  let pending = reading.get(key);
+  if (!pending) {
+    const path = `/manga/${mangaId}/chapter-${chapterString}-${translationType}`;
+    pending = Cache.remember(`allmanga:read:${key}`, READ_TTL, () => readChapter(path))
+      .then(({ data }) => data)
+      .finally(() => reading.delete(key));
+    reading.set(key, pending);
+  }
+  const urls = await pending;
+  return {
+    provider: LABEL,
+    id: chapterId,
+    pages: urls.map((url, index) => ({ page: index + 1, img: imageUrl(PROVIDER, url) })),
+  };
+}
+
+function proxy(request: Request) {
+  return proxyImage(request, `${BASE_URL}/`);
+}
+
+export const allmanga = {
+  parseHome,
+  parsePopular,
+  parseSearch,
+  parseRandom,
+  parseTags,
+  parseDetail,
+  parseRead,
+  proxy,
+};

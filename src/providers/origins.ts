@@ -1,27 +1,21 @@
-export const animepahe = "https://animepahe.com";
-export const animekai = "https://anikai.to";
-export const toonstream = "https://toonstream.vip";
-export const animesalt = "https://animesalt.ac";
-export const animesaturn = "https://www.animesaturn.cx";
+export const animepahe = "https://animepahe.pw";
+export const toonstream = "https://toonstream.us";
+export const animesaturn = "https://www.animesaturn.net";
 export const animeunity = "https://www.animeunity.so";
 export const animelok = "https://animelok.cc";
 
-export const flixhq = "https://flixhq.to";
-export const yflix = "https://yflix.to";
 export const primesrc = "https://primesrc.me";
-
 export const primevid = "https://primevid.click";
 export const streamtape = "https://streamta.site";
-export const doodstream = "https://myvidplay.com";
+export const doodstream = "https://playmogo.com";
 
 export const allmanga = "https://allmanga.to";
 export const allmanga_api = "https://api.allanime.day/api";
-export const mangaball = "https://mangaball.net";
-export const mangafire = "https://mangafire.to";
+export const allmanga_reader = "https://mkissa.to";
+export const mangaball = "https://mangaball.com";
 export const flamecomics = "https://flamecomics.xyz";
 export const mangapill = "https://mangapill.com";
 
-export const himovies = "https://himovies.to";
 export const tidal = "https://api.tidal.com/v1";
 
 export const miruro = "https://www.miruro.to";

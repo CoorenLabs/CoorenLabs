@@ -1,40 +1,74 @@
 import { Elysia } from "elysia";
-import { Animepahe } from "./animepahe";
+import { Animepahe, AnimepaheUnavailable } from "./animepahe";
+
+const encoder = new TextEncoder();
+
+const prefix = "/anime/animepahe";
+
+async function guard(set: { status?: number | string }, task: () => Promise<unknown>) {
+  try {
+    return await task();
+  } catch (err) {
+    if (!(err instanceof AnimepaheUnavailable)) throw err;
+    set.status = 502;
+    return { error: err.message };
+  }
+}
 
 export const animepaheRoutes = new Elysia({ prefix: "/animepahe" })
-
-  .get("/search/:query", async ({ params: { query } }) => {
-    return { results: await Animepahe.search(query) };
-  })
-
-  .get("/latest", async () => {
-    return { results: await Animepahe.latest() };
-  })
-
-  .get("/info/:id", async ({ params: { id } }) => {
-    const info = await Animepahe.info(id);
-    if (!info) return { error: "Anime not found" };
-    return info;
-  })
-
-  .get("/episodes/:id", async ({ params: { id } }) => {
-    const episodes = await Animepahe.fetchAllEpisodes(id);
-    return { results: episodes };
-  })
-
-  .get("/episode/:id/:session", async ({ params: { id, session } }) => {
-    const stream = new ReadableStream({
-      async start(controller) {
-        for await (const result of Animepahe.streams(id, session)) {
-          controller.enqueue(new TextEncoder().encode(JSON.stringify(result) + "\n"));
-        }
-        controller.close();
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-  });
+  .get("/", () => ({
+    name: "animepahe",
+    description: "Anime provider backed by animepahe — search, info, episodes and kwik streams.",
+    endpoints: [
+      prefix + "/search/:query",
+      prefix + "/latest",
+      prefix + "/info/:id",
+      prefix + "/episodes/:id",
+      prefix + "/episode/:id/:session",
+    ],
+  }))
+  .get("/search/:query", ({ params, set }) =>
+    guard(set, async () => ({ results: await Animepahe.search(params.query) })),
+  )
+  .get("/latest", ({ set }) => guard(set, async () => ({ results: await Animepahe.latest() })))
+  .get("/info/:id", ({ params, set }) =>
+    guard(set, async () => {
+      const info = await Animepahe.info(params.id);
+      if (info) return info;
+      set.status = 404;
+      return { error: "Anime not found" };
+    }),
+  )
+  .get("/episodes/:id", ({ params, set }) =>
+    guard(set, async () => {
+      const results = await Animepahe.fetchAllEpisodes(params.id);
+      if (results) return { results };
+      set.status = 404;
+      return { error: "Anime not found" };
+    }),
+  )
+  .get("/episode/:id/:session", ({ params, set }) =>
+    guard(set, async () => {
+      const streams = Animepahe.streams(params.id, params.session);
+      const first = await streams.next();
+      if (first.done) {
+        set.status = 404;
+        return { error: "No streams found" };
+      }
+      let pending: typeof first | null = first;
+      const body = new ReadableStream({
+        async pull(controller) {
+          const { value, done } = pending ?? (await streams.next());
+          pending = null;
+          if (done) controller.close();
+          else controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`));
+        },
+        cancel() {
+          void streams.return(undefined);
+        },
+      });
+      return new Response(body, {
+        headers: { "Content-Type": "application/x-ndjson; charset=utf-8" },
+      });
+    }),
+  );

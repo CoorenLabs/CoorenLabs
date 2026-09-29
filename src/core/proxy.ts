@@ -1,13 +1,21 @@
 import { SERVER_ORIGIN } from "./config";
 
-export const proxifySource = (url: string, headers?: Record<string, string> | undefined) => {
-  const urlParam = `?url=` + encodeURIComponent(url);
-  const headerParam = headers ? `&headers=` + encodeURIComponent(JSON.stringify(headers)) : "";
-  if (url.includes(".m3u")) {
-    // count as hls source
-    return SERVER_ORIGIN + "/proxy/m3u8-proxy" + urlParam + headerParam;
-  } else {
-    // count as mp4
-    return SERVER_ORIGIN + "/proxy/mp4-proxy" + urlParam + headerParam;
-  }
+export type ProxyKind = "hls" | "mp4" | "segment" | "file";
+
+export type ProxyHeaders = Record<string, string>;
+
+const ENDPOINT: Record<ProxyKind, string> = {
+  hls: "m3u8-proxy",
+  mp4: "mp4-proxy",
+  segment: "ts-segment",
+  file: "fetch",
 };
+
+export function proxyUrl(url: string, headers?: ProxyHeaders | null, kind?: ProxyKind): string {
+  const type = kind ?? (/\.m3u8?(?:[?#]|$)/i.test(url) ? "hls" : "mp4");
+  const header =
+    headers && Object.keys(headers).length
+      ? `&headers=${encodeURIComponent(JSON.stringify(headers))}`
+      : "";
+  return `${SERVER_ORIGIN}/proxy/${ENDPOINT[type]}?url=${encodeURIComponent(url)}${header}`;
+}

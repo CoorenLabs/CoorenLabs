@@ -1,344 +1,186 @@
 import { Elysia } from "elysia";
+import { Logger } from "../../../core/logger";
 import { tidal } from "./tidal";
 
-function ok(data: unknown) {
-  return { status: 200, success: true, data };
+type Query = Record<string, string | undefined>;
+type Context = {
+  params: Record<string, string>;
+  query: Query;
+  headers: Query;
+  set: { status?: number | string };
+};
+type Endpoint = [paths: string[], load: (ctx: Context) => Promise<unknown>, notFound?: string];
+
+class RouteError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
-function err(set: any, status: number, message: string) {
-  set.status = status;
-  return { status, success: false, message, data: null };
+const ok = (data: unknown) => ({ status: 200, success: true, data });
+
+const aliases = (singular: string, plural: string, path = "") => [
+  `/${singular}${path}`,
+  `/${plural}${path}`,
+];
+const limit = (query: Query, fallback: number) => parseInt(query.limit ?? "", 10) || fallback;
+const offset = (query: Query) => parseInt(query.offset ?? "", 10) || undefined;
+const session = ({ headers, query }: Context) => headers["x-tidal-sessionid"] || query.sessionId;
+const deviceType = (query: Query) => query.deviceType || "PHONE";
+
+function cleanSearch(data: any) {
+  for (const key of ["tracks", "albums", "artists", "playlists", "videos"]) {
+    if (data?.[key]?.items) data[key].items = data[key].items.map(tidal.cleanMetadata);
+  }
+  if (data?.topHit?.value) data.topHit.value = tidal.cleanMetadata(data.topHit.value);
+  return data;
 }
 
-export const tidalRoutes = new Elysia({ prefix: "/tidal" })
-  .get("/", () => {
-    return {
-      provider: "Tidal",
-      status: "operational",
-      description: "High-fidelity music streaming API with comprehensive metadata",
-      endpoints: [
-        "GET /tidal/search?q=...&limit=20   → Search everything",
-        "GET /tidal/tracks/:id             → Track details & metadata",
-        "GET /tidal/tracks/:id/stream      → DASH preview & full audio",
-        "GET /tidal/tracks/:id/radio       → Track-based radio",
-        "GET /tidal/albums/:id             → Album details",
-        "GET /tidal/albums/:id/tracks      → Album tracks",
-        "GET /tidal/artists/:id            → Artist details",
-        "GET /tidal/artists/:id/toptracks  → Artist hits",
-        "GET /tidal/playlists/:id          → Playlist details",
-        "GET /tidal/playlists/:id/tracks   → Playlist items",
-        "GET /tidal/featured               → Home spotlights",
-        "GET /tidal/videos/:id/stream      → High-quality video",
-      ],
-      note: "All resource endpoints support both singular and plural (e.g., /track and /tracks)",
-    };
-  })
+const endpoints: Endpoint[] = [
+  [
+    ["/search"],
+    async ({ query }) => {
+      const q = query.q || query.query;
+      if (!q) throw new RouteError(400, "Query parameter 'q' is required");
+      return cleanSearch(await tidal.search(q, limit(query, 20), query.types || undefined));
+    },
+  ],
+  [
+    ["/featured"],
+    async ({ query }) => tidal.cleanPageData(await tidal.getFeatured(deviceType(query))),
+  ],
+  [["/charts"], async ({ query }) => tidal.cleanPageData(await tidal.getCharts(deviceType(query)))],
+  [
+    ["/new"],
+    async ({ query }) => tidal.cleanPageData(await tidal.getNewReleases(deviceType(query))),
+  ],
+  [["/genres"], () => tidal.getGenres()],
+  [["/genres/:path"], ({ params }) => tidal.getGenre(params.path)],
+  [["/moods"], () => tidal.getMoods()],
+  [["/moods/:path"], ({ params }) => tidal.getMood(params.path)],
+  [
+    ["/recommendations"],
+    async ({ query }) => {
+      const trackId = query.trackId || query.id;
+      if (!trackId) throw new RouteError(400, "Query parameter 'trackId' is required");
+      return tidal.cleanItems(
+        await tidal.getRecommendations(trackId, limit(query, 50), offset(query)),
+      );
+    },
+  ],
+  [
+    aliases("track", "tracks", "/:id"),
+    async ({ params }) => tidal.cleanMetadata(await tidal.getTrack(params.id)),
+    "Track not found or invalid ID",
+  ],
+  [
+    aliases("track", "tracks", "/:id/stream"),
+    (ctx) =>
+      tidal.getTrackStreaming(ctx.params.id, ctx.query.audioQuality || "HI_RES", session(ctx)),
+    "Track not found or invalid ID",
+  ],
+  [
+    aliases("track", "tracks", "/:id/playbackinfo"),
+    ({ params, query }) => tidal.getTrackPlaybackInfo(params.id, query.audioQuality || "HI_RES"),
+    "Track not found or invalid ID",
+  ],
+  [aliases("track", "tracks", "/:id/radio"), ({ params }) => tidal.getTrackRadio(params.id)],
+  [
+    aliases("album", "albums", "/:id"),
+    async ({ params }) => tidal.cleanMetadata(await tidal.getAlbum(params.id)),
+    "Album not found",
+  ],
+  [
+    aliases("album", "albums", "/:id/tracks"),
+    async ({ params, query }) =>
+      tidal.cleanItems(await tidal.getAlbumTracks(params.id, limit(query, 50), offset(query))),
+  ],
+  [
+    aliases("artist", "artists", "/:id"),
+    async ({ params }) => tidal.cleanMetadata(await tidal.getArtist(params.id)),
+    "Artist not found",
+  ],
+  [
+    aliases("artist", "artists", "/:id/albums"),
+    async ({ params, query }) =>
+      tidal.cleanItems(await tidal.getArtistAlbums(params.id, limit(query, 50), offset(query))),
+  ],
+  [
+    aliases("artist", "artists", "/:id/toptracks"),
+    async ({ params, query }) =>
+      tidal.cleanItems(await tidal.getArtistTopTracks(params.id, limit(query, 10), offset(query))),
+  ],
+  [aliases("artist", "artists", "/:id/radio"), ({ params }) => tidal.getArtistRadio(params.id)],
+  [
+    aliases("playlist", "playlists", "/:id"),
+    async ({ params }) => tidal.cleanMetadata(await tidal.getPlaylist(params.id)),
+    "Playlist not found",
+  ],
+  [
+    aliases("playlist", "playlists", "/:id/tracks"),
+    async ({ params, query }) =>
+      tidal.cleanItems(await tidal.getPlaylistTracks(params.id, limit(query, 50), offset(query))),
+  ],
+  [
+    aliases("mix", "mixes", "/:id"),
+    async ({ params }) => tidal.cleanMetadata(await tidal.getMix(params.id)),
+    "Mix not found",
+  ],
+  [
+    aliases("mix", "mixes", "/:id/items"),
+    async ({ params, query }) =>
+      tidal.cleanItems(await tidal.getMixItems(params.id, limit(query, 50), offset(query))),
+    "Mix not found",
+  ],
+  [
+    aliases("video", "videos", "/:id"),
+    async ({ params }) => tidal.cleanMetadata(await tidal.getVideo(params.id)),
+    "Video not found",
+  ],
+  [
+    aliases("video", "videos", "/:id/stream"),
+    (ctx) => tidal.getVideoStreaming(ctx.params.id, ctx.query.quality || "HIGH", session(ctx)),
+    "Video not found",
+  ],
+];
 
-  // --- Search & Discovery ---
-  .get("/search", async ({ query, set }) => {
-    const q = (query.q as string) || (query.query as string) || "";
-    if (!q) return err(set, 400, "Query parameter 'q' is required");
-    const limit = parseInt(query.limit as string) || 20;
-    const types = (query.types as string) || "TRACKS,ALBUMS,ARTISTS,PLAYLISTS,VIDEOS";
-    const data = await tidal.search(q, limit, types);
-    if (data && "error" in data) return err(set, 500, data.error as string);
+export const tidalRoutes = new Elysia({ prefix: "/tidal" }).get("/", () => ({
+  provider: "Tidal",
+  status: "operational",
+  description: "High-fidelity music streaming API with comprehensive metadata",
+  endpoints: [
+    "GET /tidal/search?q=...&limit=20   → Search everything",
+    "GET /tidal/tracks/:id             → Track details & metadata",
+    "GET /tidal/tracks/:id/stream      → DASH preview & full audio",
+    "GET /tidal/tracks/:id/radio       → Track-based radio",
+    "GET /tidal/albums/:id             → Album details",
+    "GET /tidal/albums/:id/tracks      → Album tracks",
+    "GET /tidal/artists/:id            → Artist details",
+    "GET /tidal/artists/:id/toptracks  → Artist hits",
+    "GET /tidal/playlists/:id          → Playlist details",
+    "GET /tidal/playlists/:id/tracks   → Playlist items",
+    "GET /tidal/featured               → Home spotlights",
+    "GET /tidal/videos/:id/stream      → High-quality video",
+  ],
+  note: "All resource endpoints support both singular and plural (e.g., /track and /tracks)",
+}));
 
-    if (data.tracks?.items)
-      data.tracks.items = data.tracks.items.map((i: any) => tidal.cleanMetadata(i));
-    if (data.albums?.items)
-      data.albums.items = data.albums.items.map((i: any) => tidal.cleanMetadata(i));
-    if (data.artists?.items)
-      data.artists.items = data.artists.items.map((i: any) => tidal.cleanMetadata(i));
-    if (data.playlists?.items)
-      data.playlists.items = data.playlists.items.map((i: any) => tidal.cleanMetadata(i));
-    if (data.videos?.items)
-      data.videos.items = data.videos.items.map((i: any) => tidal.cleanMetadata(i));
-    if (data.topHit?.value) data.topHit.value = tidal.cleanMetadata(data.topHit.value);
-
-    return ok(data);
-  })
-  .get("/featured", async ({ query, set }) => {
-    const data = await tidal.getFeatured((query.deviceType as string) || "PHONE");
-    if (data && "error" in data) return err(set, 500, data.error as string);
-    return ok(tidal.cleanPageData(data));
-  })
-  .get("/charts", async ({ query, set }) => {
-    const data = await tidal.getCharts((query.deviceType as string) || "PHONE");
-    if (data && "error" in data) return err(set, 500, data.error as string);
-    return ok(tidal.cleanPageData(data));
-  })
-  .get("/new", async ({ query, set }) => {
-    const data = await tidal.getNewReleases((query.deviceType as string) || "PHONE");
-    if (data && "error" in data) return err(set, 500, data.error as string);
-    return ok(tidal.cleanPageData(data));
-  })
-  .get("/genres", async ({ set }) => {
-    const data = await tidal.getGenres();
-    if (data && "error" in data) return err(set, 500, data.error as string);
-    return ok(data);
-  })
-  .get("/genres/:path", async ({ params, set }) => {
-    const data = await tidal.getGenre(params.path);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    return ok(data);
-  })
-  .get("/moods", async ({ set }) => {
-    const data = await tidal.getMoods();
-    if (data && "error" in data) return err(set, 500, data.error as string);
-    return ok(data);
-  })
-  .get("/moods/:path", async ({ params, set }) => {
-    const data = await tidal.getMood(params.path);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    return ok(data);
-  })
-  .get("/recommendations", async ({ query, set }) => {
-    const trackId = (query.trackId as string) || (query.id as string);
-    if (!trackId) return err(set, 400, "Query parameter 'trackId' is required");
-    const data = await tidal.getRecommendations(trackId, parseInt(query.limit as string) || 50);
-    if (data && "error" in data) return err(set, 500, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-
-  // --- Tracks (Dual Alias) ---
-  .get("/track/:id", async ({ params, set }) => {
-    const data = await tidal.getTrack(params.id);
-    if (data && "error" in data) return err(set, 404, "Track not found or invalid ID");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/tracks/:id", async ({ params, set }) => {
-    const data = await tidal.getTrack(params.id);
-    if (data && "error" in data) return err(set, 404, "Track not found or invalid ID");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/track/:id/stream", async ({ params, query, headers }) => {
-    const quality = (query.audioQuality as string) || "HI_RES";
-    const sessionId = (headers["x-tidal-sessionid"] as string) || (query.sessionId as string);
-    const data = await tidal.getTrackStreaming(params.id, quality, sessionId);
-    if (data.preview?.manifest)
+for (const [paths, load, notFound] of endpoints) {
+  for (const path of paths) {
+    tidalRoutes.get(path, async (ctx: Context) => {
       try {
-        data.preview.manifestDecoded = Buffer.from(data.preview.manifest, "base64").toString(
-          "utf-8",
-        );
-      } catch {
-        /* ignore */
+        return ok(await load(ctx));
+      } catch (err) {
+        const status =
+          typeof (err as RouteError).status === "number" ? (err as RouteError).status : 500;
+        if (status === 500) Logger.error(`[tidal] ${path}`, err);
+        ctx.set.status = status;
+        const message = status === 404 && notFound ? notFound : (err as Error).message;
+        return { status, success: false, message, data: null };
       }
-    if (data.audio?.manifest)
-      try {
-        data.audio.manifestDecoded = Buffer.from(data.audio.manifest, "base64").toString("utf-8");
-      } catch {
-        /* ignore */
-      }
-    return ok(data);
-  })
-  .get("/tracks/:id/stream", async ({ params, query, headers }) => {
-    const quality = (query.audioQuality as string) || "HI_RES";
-    const sessionId = (headers["x-tidal-sessionid"] as string) || (query.sessionId as string);
-    const data = await tidal.getTrackStreaming(params.id, quality, sessionId);
-    if (data.preview?.manifest)
-      try {
-        data.preview.manifestDecoded = Buffer.from(data.preview.manifest, "base64").toString(
-          "utf-8",
-        );
-      } catch {
-        /* ignore */
-      }
-    if (data.audio?.manifest)
-      try {
-        data.audio.manifestDecoded = Buffer.from(data.audio.manifest, "base64").toString("utf-8");
-      } catch {
-        /* ignore */
-      }
-    return ok(data);
-  })
-  .get("/track/:id/playbackinfo", async ({ params, query, set }) => {
-    const data = await tidal.getTrackPlaybackInfo(
-      params.id,
-      (query.audioQuality as string) || "HI_RES",
-    );
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    return ok(data);
-  })
-  .get("/tracks/:id/playbackinfo", async ({ params, query, set }) => {
-    const data = await tidal.getTrackPlaybackInfo(
-      params.id,
-      (query.audioQuality as string) || "HI_RES",
-    );
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    return ok(data);
-  })
-  .get("/track/:id/radio", async ({ params, set }) => {
-    const data = await tidal.getTrackRadio(params.id);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    return ok(data);
-  })
-  .get("/tracks/:id/radio", async ({ params, set }) => {
-    const data = await tidal.getTrackRadio(params.id);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    return ok(data);
-  })
-
-  // --- Albums (Dual Alias) ---
-  .get("/album/:id", async ({ params, set }) => {
-    const data = await tidal.getAlbum(params.id);
-    if (data && "error" in data) return err(set, 404, "Album not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/albums/:id", async ({ params, set }) => {
-    const data = await tidal.getAlbum(params.id);
-    if (data && "error" in data) return err(set, 404, "Album not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/album/:id/tracks", async ({ params, query, set }) => {
-    const data = await tidal.getAlbumTracks(params.id, parseInt(query.limit as string) || 50);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-  .get("/albums/:id/tracks", async ({ params, query, set }) => {
-    const data = await tidal.getAlbumTracks(params.id, parseInt(query.limit as string) || 50);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-
-  // --- Artists (Dual Alias) ---
-  .get("/artist/:id", async ({ params, set }) => {
-    const data = await tidal.getArtist(params.id);
-    if (data && "error" in data) return err(set, 404, "Artist not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/artists/:id", async ({ params, set }) => {
-    const data = await tidal.getArtist(params.id);
-    if (data && "error" in data) return err(set, 404, "Artist not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/artist/:id/albums", async ({ params, query, set }) => {
-    const data = await tidal.getArtistAlbums(params.id, parseInt(query.limit as string) || 50);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-  .get("/artists/:id/albums", async ({ params, query, set }) => {
-    const data = await tidal.getArtistAlbums(params.id, parseInt(query.limit as string) || 50);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-  .get("/artist/:id/toptracks", async ({ params, query, set }) => {
-    const data = await tidal.getArtistTopTracks(params.id, parseInt(query.limit as string) || 10);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-  .get("/artists/:id/toptracks", async ({ params, query, set }) => {
-    const data = await tidal.getArtistTopTracks(params.id, parseInt(query.limit as string) || 10);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-  .get("/artist/:id/radio", async ({ params, set }) => {
-    const data = await tidal.getArtistRadio(params.id);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    return ok(data);
-  })
-  .get("/artists/:id/radio", async ({ params, set }) => {
-    const data = await tidal.getArtistRadio(params.id);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    return ok(data);
-  })
-
-  // --- Playlists (Dual Alias) ---
-  .get("/playlist/:id", async ({ params, set }) => {
-    const data = await tidal.getPlaylist(params.id);
-    if (data && "error" in data) return err(set, 404, "Playlist not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/playlists/:id", async ({ params, set }) => {
-    const data = await tidal.getPlaylist(params.id);
-    if (data && "error" in data) return err(set, 404, "Playlist not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/playlist/:id/tracks", async ({ params, query, set }) => {
-    const data = await tidal.getPlaylistTracks(params.id, parseInt(query.limit as string) || 50);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-  .get("/playlists/:id/tracks", async ({ params, query, set }) => {
-    const data = await tidal.getPlaylistTracks(params.id, parseInt(query.limit as string) || 50);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-
-  // --- Mixes ---
-  .get("/mix/:id", async ({ params, set }) => {
-    const data = await tidal.getMix(params.id);
-    if (data && "error" in data) return err(set, 404, "Mix not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/mixes/:id", async ({ params, set }) => {
-    const data = await tidal.getMix(params.id);
-    if (data && "error" in data) return err(set, 404, "Mix not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/mixes/:id/items", async ({ params, query, set }) => {
-    const data = await tidal.getMixItems(params.id, parseInt(query.limit as string) || 50);
-    if (data && "error" in data) return err(set, 404, data.error as string);
-    if (data.items) data.items = data.items.map((i: any) => tidal.cleanMetadata(i));
-    return ok(data);
-  })
-
-  // --- Videos ---
-  .get("/video/:id", async ({ params, set }) => {
-    const data = await tidal.getVideo(params.id);
-    if (data && "error" in data) return err(set, 404, "Video not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/videos/:id", async ({ params, set }) => {
-    const data = await tidal.getVideo(params.id);
-    if (data && "error" in data) return err(set, 404, "Video not found");
-    return ok(tidal.cleanMetadata(data));
-  })
-  .get("/video/:id/stream", async ({ params, query, headers }) => {
-    const quality = (query.quality as string) || "HIGH";
-    const sessionId = (headers["x-tidal-sessionid"] as string) || (query.sessionId as string);
-    const data = await tidal.getVideoStreaming(params.id, quality, sessionId);
-    if (data.preview?.manifest)
-      try {
-        data.preview.manifestDecoded = Buffer.from(data.preview.manifest, "base64").toString(
-          "utf-8",
-        );
-      } catch {
-        /* ignore */
-      }
-    if (data.audio?.manifest)
-      try {
-        data.audio.manifestDecoded = Buffer.from(data.audio.manifest, "base64").toString("utf-8");
-      } catch {
-        /* ignore */
-      }
-    return ok(data);
-  })
-  .get("/videos/:id/stream", async ({ params, query, headers }) => {
-    const quality = (query.quality as string) || "HIGH";
-    const sessionId = (headers["x-tidal-sessionid"] as string) || (query.sessionId as string);
-    const data = await tidal.getVideoStreaming(params.id, quality, sessionId);
-    if (data.preview?.manifest)
-      try {
-        data.preview.manifestDecoded = Buffer.from(data.preview.manifest, "base64").toString(
-          "utf-8",
-        );
-      } catch {
-        /* ignore */
-      }
-    if (data.audio?.manifest)
-      try {
-        data.audio.manifestDecoded = Buffer.from(data.audio.manifest, "base64").toString("utf-8");
-      } catch {
-        /* ignore */
-      }
-    return ok(data);
-  });
+    });
+  }
+}

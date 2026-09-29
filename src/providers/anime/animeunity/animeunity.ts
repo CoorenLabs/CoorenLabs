@@ -1,154 +1,133 @@
 import * as cheerio from "cheerio";
-import { Logger } from "../../../core/logger";
-import { animeunity as animeunityOrigin } from "../../origins";
-import type { AnimeUnityEpisode, AnimeUnityInfo, AnimeUnitySearchItem } from "./types";
+import { fetcher } from "../../../core/lib/fetcher";
+import { animeunity as BASE_URL } from "../../origins";
+import type {
+  AnimeUnityEpisode,
+  AnimeUnityInfo,
+  AnimeUnityRecord,
+  AnimeUnitySearchItem,
+  AnimeUnityStreams,
+} from "./types";
+
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const HEADERS = { Referer: `${BASE_URL}/`, "User-Agent": USER_AGENT };
+const API_HEADERS = { ...HEADERS, "X-Requested-With": "XMLHttpRequest" };
+const EPISODE_RANGE = 120;
+
+const titleOf = (item: AnimeUnityRecord) => item.title || item.title_eng || item.title_it || "";
+
+const animeUrl = (id: number | string, slug?: string) =>
+  `${BASE_URL}/anime/${id}${slug ? `-${slug}` : ""}`;
+
+export class AnimeUnityUnavailable extends Error {}
 
 export class AnimeUnity {
-  private static baseUrl = animeunityOrigin;
-
-  private static headers(): Record<string, string> {
-    return {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.5",
-      "Sec-Fetch-Dest": "document",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "none",
-      "Sec-Fetch-User": "?1",
-      Connection: "keep-alive",
-      Referer: `${this.baseUrl}/`,
-    };
+  private static async load(
+    url: string,
+    headers: Record<string, string> = HEADERS,
+    label = "animeunity",
+  ): Promise<string | null> {
+    const res = await fetcher(url, true, label, { headers });
+    if (res?.success) return res.text;
+    if (res?.status === 404) return null;
+    throw new AnimeUnityUnavailable(
+      `${new URL(url).host} responded ${res?.status ?? "with no response"}`,
+    );
   }
 
-  static async search(query: string): Promise<{ results: AnimeUnitySearchItem[] }> {
+  private static async api<T>(path: string): Promise<T | null> {
+    const text = await this.load(`${BASE_URL}${path}`, API_HEADERS);
+    if (text === null) return null;
     try {
-      const url = `${this.baseUrl}/archivio?title=${encodeURIComponent(query)}`;
-      const res = await fetch(url, { headers: this.headers() });
-      const html = await res.text();
-      const $ = cheerio.load(html);
-
-      const recordsAttr = $("archivio").attr("records");
-      if (!recordsAttr) return { results: [] };
-
-      const records = JSON.parse(recordsAttr);
-      const results: AnimeUnitySearchItem[] = records.map((item: any) => ({
-        id: item.id,
-        title: item.title,
-        url: `${this.baseUrl}/anime/${item.id}-${item.slug}`,
-        image: item.imageurl,
-        type: item.type,
-        score: item.score,
-      }));
-
-      return { results };
-    } catch (err) {
-      Logger.error(`AnimeUnity search error: ${String(err)}`);
-      return { results: [] };
+      return JSON.parse(text) as T;
+    } catch {
+      throw new AnimeUnityUnavailable("AnimeUnity returned an invalid response");
     }
+  }
+
+  static async search(query: string): Promise<AnimeUnitySearchItem[]> {
+    const html = await this.load(`${BASE_URL}/archivio?title=${encodeURIComponent(query)}`);
+    const records = html && cheerio.load(html)("archivio").attr("records");
+    if (!records) return [];
+    return (JSON.parse(records) as AnimeUnityRecord[]).map((item) => ({
+      id: item.id,
+      title: titleOf(item),
+      url: animeUrl(item.id, item.slug),
+      image: item.imageurl ?? "",
+      type: item.type,
+      score: item.score,
+    }));
   }
 
   static async info(id: string): Promise<AnimeUnityInfo | null> {
-    try {
-      const infoUrl = `${this.baseUrl}/info_api/${id}`;
-      const res = await fetch(infoUrl, { headers: this.headers() });
-      const data = await res.json();
+    const data = await this.api<AnimeUnityRecord>(`/info_api/${id}`);
+    if (!data || typeof data.episodes_count !== "number") return null;
 
-      if (!data || !data.id) return null;
+    const url = animeUrl(id, data.slug);
+    const starts = Array.from(
+      { length: Math.floor(data.episodes_count / EPISODE_RANGE) + 1 },
+      (_, i) => i * EPISODE_RANGE,
+    );
+    const pages = await Promise.all(
+      starts.map((start) =>
+        this.api<{ episodes?: { id: number; number: string }[] }>(
+          `/info_api/${id}/1?start_range=${start}&end_range=${start + EPISODE_RANGE - 1}`,
+        ),
+      ),
+    );
 
-      const epUrl = `${this.baseUrl}/info_api/${id}/1?start_range=0&end_range=119`;
-      const epRes = await fetch(epUrl, { headers: this.headers() });
-      const epData = await epRes.json();
-
-      const episodes: AnimeUnityEpisode[] = (epData.episodes || []).map((ep: any) => ({
+    const seen = new Set<number>();
+    const episodes: AnimeUnityEpisode[] = pages
+      .flatMap((page) => page?.episodes ?? [])
+      .filter((ep) => !seen.has(ep.id) && seen.add(ep.id))
+      .map((ep) => ({
         id: `${id}/${ep.id}`,
         number: parseFloat(ep.number),
-        url: `${this.baseUrl}/anime/${id}-${data.slug}/${ep.id}`,
+        url: `${url}/${ep.id}`,
       }));
 
-      return {
-        id: data.id,
-        title: data.title,
-        url: `${this.baseUrl}/anime/${id}-${data.slug}`,
-        image: data.imageurl,
-        description: data.plot,
-        genres: data.genres,
-        status: data.status,
-        totalEpisodes: data.episodes_count,
-        episodes,
-      };
-    } catch (err) {
-      Logger.error(`AnimeUnity info error: ${String(err)}`);
-      return null;
-    }
+    return {
+      id: Number(id),
+      title: titleOf(data),
+      url,
+      image: data.imageurl,
+      description: data.plot,
+      genres: data.genres?.map((genre) => (typeof genre === "string" ? genre : genre.name)),
+      status: data.status,
+      totalEpisodes: data.episodes_count,
+      episodes,
+    };
   }
 
-  static async streams(episodeId: string): Promise<any> {
-    try {
-      // episodeId format: "animeId/epId"
-      const [animeId, epId] = episodeId.split("/");
+  static async streams(episodeId: string): Promise<AnimeUnityStreams | null> {
+    const embed = (await this.load(`${BASE_URL}/embed-url/${episodeId}`))?.trim();
+    if (!embed) return null;
+    const embedUrl = new URL(embed, BASE_URL).href;
 
-      const infoUrl = `${this.baseUrl}/info_api/${animeId}`;
-      const infoRes = await fetch(infoUrl, { headers: this.headers() });
-      const infoData = await infoRes.json();
+    const player = await this.load(embedUrl, HEADERS, "vixcloud");
+    if (!player) return null;
 
-      const url = `${this.baseUrl}/anime/${animeId}-${infoData.slug}/${epId}`;
+    const playlist = player.match(/url:\s*'([^']+)'/)?.[1];
+    const token = player.match(/'token':\s*'([^']+)'/)?.[1];
+    const expires = player.match(/'expires':\s*'([^']+)'/)?.[1];
+    const download = player.match(/window\.downloadUrl\s*=\s*'([^']+)'/)?.[1];
+    const fhd = /window\.canPlayFHD\s*=\s*true/.test(player);
 
-      const res = await fetch(url, { headers: this.headers() });
-      const html = await res.text();
-      const $ = cheerio.load(html);
-
-      let embedUrl = $("video-player").attr("embed_url");
-      if (!embedUrl) return [];
-
-      if (embedUrl.startsWith("//")) embedUrl = "https:" + embedUrl;
-      embedUrl = embedUrl.replace(/&amp;/g, "&");
-
-      const playerRes = await fetch(embedUrl, { headers: { ...this.headers(), Referer: url } });
-      const playerHtml = await playerRes.text();
-
-      const streams: any[] = [];
-      const downloads: any[] = [];
-      const domainMatch = playerHtml.match(/url: '(.*)'/);
-      const tokenMatch = playerHtml.match(/token': '(.*)'/);
-      const expiresMatch = playerHtml.match(/expires': '(.*)'/);
-      const downloadMatch = playerHtml.match(/window\.downloadUrl\s*=\s*['"](.*?)['"]/);
-
-      if (domainMatch && tokenMatch && expiresMatch) {
-        const domain = domainMatch[1];
-        const token = tokenMatch[1];
-        const expires = expiresMatch[1];
-        const streamUrl = `${domain}${domain.includes("?") ? "&" : "?"}token=${token}&referer=&expires=${expires}&h=1`;
-
-        streams.push({
-          url: streamUrl,
-          quality: "auto",
-          isM3U8: true,
-        });
-      }
-
-      if (downloadMatch) {
-        downloads.push({
-          url: downloadMatch[1],
-          quality: "1080p",
-        });
-      }
-
-      const response: any = {
-        streams,
-      };
-
-      if (downloads.length > 0) {
-        response.downloads = downloads;
-      }
-
-      return {
-        results: response,
-      };
-    } catch (err) {
-      Logger.error(`AnimeUnity streams error: ${String(err)}`);
-      return { results: { streams: [] } };
-    }
+    const streams =
+      playlist && token && expires
+        ? [
+            {
+              url: `${playlist}${playlist.includes("?") ? "&" : "?"}token=${token}&expires=${expires}${fhd ? "&h=1" : ""}`,
+              quality: "auto",
+              isM3U8: true,
+            },
+          ]
+        : [];
+    if (!download) return { streams };
+    return {
+      streams,
+      downloads: [{ url: download, quality: download.match(/(\d{3,4}p)\.mp4/)?.[1] ?? "unknown" }],
+    };
   }
 }

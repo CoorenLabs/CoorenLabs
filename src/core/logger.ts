@@ -1,36 +1,37 @@
-//! AI GENERATED 💀
-export class Logger {
-  private static readonly colors = {
-    reset: "\x1b[0m",
-    info: "\x1b[36m",
-    success: "\x1b[32m",
-    warn: "\x1b[33m",
-    error: "\x1b[31m",
-    debug: "\x1b[90m",
-  };
+import { LOG_LEVEL } from "./config";
 
-  private static formatMessage(level: string, color: string, message: string): string {
-    const time = new Date().toLocaleTimeString();
-    return `${this.colors.debug}[${time}]${this.colors.reset} ${color}[${level}]${this.colors.reset} ${message}`;
-  }
+const PRIORITY = { debug: 10, info: 20, success: 20, warn: 30, error: 40, silent: 50 };
+const COLOR = {
+  debug: "\x1b[90m",
+  info: "\x1b[36m",
+  success: "\x1b[32m",
+  warn: "\x1b[33m",
+  error: "\x1b[31m",
+};
+const RESET = "\x1b[0m";
+const threshold = PRIORITY[LOG_LEVEL as keyof typeof PRIORITY] ?? PRIORITY.info;
 
-  public static info(message: any, ...args: any[]) {
-    console.log(this.formatMessage("INFO", this.colors.info, message), ...args);
-  }
+type Level = keyof typeof COLOR;
 
-  public static success(message: any, ...args: any[]) {
-    console.log(this.formatMessage("SUCCESS", this.colors.success, message), ...args);
-  }
+const SINK: Record<Level, (...args: unknown[]) => void> = {
+  debug: console.debug,
+  info: console.log,
+  success: console.log,
+  warn: console.warn,
+  error: console.error,
+};
 
-  public static warn(message: any, ...args: any[]) {
-    console.warn(this.formatMessage("WARN", this.colors.warn, message), ...args);
-  }
-
-  public static error(message: any, ...args: any[]) {
-    console.error(this.formatMessage("ERROR", this.colors.error, message), ...args);
-  }
-
-  public static debug(message: any, ...args: any[]) {
-    console.debug(this.formatMessage("DEBUG", this.colors.debug, message), ...args);
-  }
+function write(level: Level, message: unknown, args: unknown[]) {
+  if (PRIORITY[level] < threshold) return;
+  const prefix = `${COLOR.debug}[${new Date().toLocaleTimeString()}]${RESET} ${COLOR[level]}[${level.toUpperCase()}]${RESET}`;
+  if (typeof message === "string") SINK[level](`${prefix} ${message}`, ...args);
+  else SINK[level](prefix, message, ...args);
 }
+
+export const Logger = {
+  debug: (message: unknown, ...args: unknown[]) => write("debug", message, args),
+  info: (message: unknown, ...args: unknown[]) => write("info", message, args),
+  success: (message: unknown, ...args: unknown[]) => write("success", message, args),
+  warn: (message: unknown, ...args: unknown[]) => write("warn", message, args),
+  error: (message: unknown, ...args: unknown[]) => write("error", message, args),
+};

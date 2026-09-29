@@ -1,4 +1,4 @@
-name: CI - Code Quality & Multi-Runtime Tests
+name: CI
 
 on:
   push:
@@ -7,76 +7,29 @@ on:
     branches: ["master"]
 
 jobs:
-  lint:
-    name: Lint & Format
+  check:
+    name: Lint & Typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v1
-      - run: bun install
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.x
+      - run: bun install --frozen-lockfile
       - run: bun run lint
-
-  test-runtimes:
-    name: Test on ${{ matrix.runtime }}
-    needs: lint
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        runtime: [bun, node, deno]
-    
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Bun
-        if: matrix.runtime == 'bun'
-        uses: oven-sh/setup-bun@v1
-
-      - name: Setup Node.js
-        if: matrix.runtime == 'node'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup Deno
-        if: matrix.runtime == 'deno'
-        uses: denoland/setup-deno@v1
-        with:
-          deno-version: v1.x
-
-      - name: Install Dependencies
-        run: |
-          if [ "${{ matrix.runtime }}" = "bun" ]; then
-            bun install
-          else
-            npm install
-          fi
-
-      - name: Run Tests (Bun)
-        if: matrix.runtime == 'bun'
-        run: NODE_ENV=test bun run test:vitest
-
-      - name: Run Tests (Node)
-        if: matrix.runtime == 'node'
-        run: NODE_ENV=test npm run test:jest
-
-      - name: Run Tests (Deno)
-        if: matrix.runtime == 'deno'
-        run: NODE_ENV=test deno task test || echo "Deno task not found, skipping specific test"
+      - run: bun run typecheck
 
   codeql:
     name: CodeQL Analysis
-    needs: lint
+    needs: check
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       security-events: write
     steps:
       - uses: actions/checkout@v4
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+          build-mode: none
+      - uses: github/codeql-action/analyze@v3

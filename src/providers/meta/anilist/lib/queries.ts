@@ -1,56 +1,39 @@
-// ─── AniList GraphQL query fragments ─────────────────────────────────────────
-// Ported from anime-stream-link/server.js
-
-export const ANILIST_URL = "https://graphql.anilist.co";
-
-export const SPOTLIGHT_QUERY = `
-  query ($id: Int) {
-    Media(id: $id, type: ANIME) {
-      id
-      title { english romaji }
-      bannerImage
-      coverImage { extraLarge large color}
-      description
-      season
-      seasonYear
-      episodes
-      status
-      format
-      nextAiringEpisode {
-        timeUntilAiring
-        episode
+export const HOME_QUERY = `
+  query ($season: MediaSeason, $seasonYear: Int) {
+    spotlight: Page(page: 1, perPage: 20) {
+      media(type: ANIME, status: RELEASING, isAdult: false, sort: TRENDING_DESC) {
+        ...listFields
+        description
+        season
+        seasonYear
+        nextAiringEpisode { timeUntilAiring episode }
       }
     }
-  }
-`;
-
-export const HOME_DATA_QUERY = `
-  query ($season: MediaSeason, $seasonYear: Int) {
     trending: Page(page: 1, perPage: 20) {
-      media(type: ANIME, sort: TRENDING_DESC) { ...mediaFields }
+      media(type: ANIME, sort: TRENDING_DESC) { ...listFields }
     }
     popular: Page(page: 1, perPage: 20) {
-      media(type: ANIME, sort: POPULARITY_DESC) { ...mediaFields }
+      media(type: ANIME, sort: POPULARITY_DESC) { ...listFields }
     }
     movies: Page(page: 1, perPage: 20) {
-      media(type: ANIME, format: MOVIE, sort: POPULARITY_DESC) { ...mediaFields }
+      media(type: ANIME, format: MOVIE, sort: POPULARITY_DESC) { ...listFields }
     }
     seasonal: Page(page: 1, perPage: 20) {
-      media(type: ANIME, season: $season, seasonYear: $seasonYear, sort: POPULARITY_DESC) { ...mediaFields }
+      media(type: ANIME, season: $season, seasonYear: $seasonYear, sort: POPULARITY_DESC) { ...listFields }
     }
     allTime: Page(page: 1, perPage: 20) {
-      media(type: ANIME, sort: SCORE_DESC) { ...mediaFields }
+      media(type: ANIME, sort: SCORE_DESC) { ...listFields }
     }
     comingSoon: Page(page: 1, perPage: 20) {
-      media(type: ANIME, status: NOT_YET_RELEASED, sort: POPULARITY_DESC) { ...mediaFields }
+      media(type: ANIME, status: NOT_YET_RELEASED, sort: POPULARITY_DESC) { ...listFields }
     }
   }
 
-  fragment mediaFields on Media {
+  fragment listFields on Media {
     id
-    title { romaji english native }
-    coverImage { extraLarge large color }
-    isAdult
+    title { romaji english }
+    coverImage { extraLarge }
+    bannerImage
     format
     episodes
     status
@@ -62,7 +45,7 @@ export const ANIME_DETAIL_QUERY = `
     Media(id: $id, type: ANIME) {
       id
       title { romaji english native }
-      coverImage { extraLarge large color }
+      coverImage { extraLarge color }
       bannerImage
       description
       season
@@ -72,7 +55,6 @@ export const ANIME_DETAIL_QUERY = `
       nextAiringEpisode { timeUntilAiring episode }
       status
       format
-      isAdult
       genres
       averageScore
       meanScore
@@ -118,7 +100,6 @@ export const ANIME_DETAIL_QUERY = `
             id
             title { romaji english }
             coverImage { extraLarge }
-            bannerImage
             format
             status
             episodes
@@ -140,8 +121,9 @@ export const SEARCH_QUERY = `
       }
       media(search: $search, type: ANIME, sort: [POPULARITY_DESC, SCORE_DESC]) {
         id
-        title { romaji english native }
+        title { romaji english }
         coverImage { extraLarge color }
+        bannerImage
         format
         status
         episodes

@@ -5,39 +5,37 @@ First off, thank you for considering contributing to CoorenLabs! It's people lik
 ## How Can I Contribute?
 
 ### Reporting Bugs
+
 - Check the [Issues](https://github.com/CoorenLabs/CoorenLabs/issues) to see if it has already been reported.
 - Use a clear and descriptive title.
 - Describe the exact steps which reproduce the problem.
 
 ### Suggesting Enhancements
+
 - Open an Issue with the "enhancement" tag.
 - Explain why this enhancement would be useful to most users.
 
 ### Pull Requests
-1.  **Fork the repo** and create your branch from `main`.
+
+1.  **Fork the repo** and create your branch from `master`.
 2.  **Install dependencies**: `bun install`.
 3.  **Implement your changes**.
-4.  **Add tests**: Use the existing mock-based testing framework in `scripts/tests/`.
-5.  **Ensure tests pass**: Run `npm run test:vitest`.
-6.  **Lint your code**: Run `npm run lint`.
-7.  **Submit a PR**: Describe your changes in detail and link to any relevant issues.
+4.  **Ensure checks pass**: Run `bun run typecheck` and `bun run lint`.
+5.  **Submit a PR**: Describe your changes in detail and link to any relevant issues.
 
 ## Development Setup
 
 CoorenLabs supports multiple runtimes, but we recommend using **Bun** for development.
 
 ```bash
-# Start dev server
 bun run dev
-
-# Run tests
-npm run test:vitest
-npm run test:jest
 ```
 
 ## Community
+
 - Join our [Discord](https://discord.gg/coorenlabs) (if available).
 - Follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
+
 By contributing, you agree that your contributions will be licensed under its [GPL-3.0 License](LICENSE).

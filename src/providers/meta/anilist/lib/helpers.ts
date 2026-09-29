@@ -1,5 +1,100 @@
-// ─── Shared formatting helpers ────────────────────────────────────────────────
-// Ported from anime-stream-link/server.js
+import { Logger } from "../../../../core/logger";
+
+const ANILIST_URL = "https://graphql.anilist.co";
+const ANIZIP_URL = "https://api.ani.zip/mappings";
+const ANIZIP_TIMEOUT_MS = 5_000;
+const RETRY_DELAY_MS = 500;
+
+export class AniListError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function fetchWithRetry(
+  url: string,
+  options: RequestInit = {},
+  retries = 2,
+  timeoutMs = 10_000,
+): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...options,
+        signal: options.signal ?? AbortSignal.timeout(timeoutMs),
+      });
+      if (res.status < 500 || attempt >= retries) return res;
+      void res.body?.cancel();
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      Logger.warn(
+        `[anilist-meta] ${url} failed (${attempt}/${retries}): ${(err as Error).message}`,
+      );
+    }
+    await sleep(RETRY_DELAY_MS * attempt);
+  }
+}
+
+export async function queryAniList(
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<any> {
+  const res = await fetchWithRetry(ANILIST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ query, variables }),
+  }).catch(() => {
+    throw new AniListError("Failed to reach AniList", 502);
+  });
+  const body = await res.json().catch(() => null);
+  const error = body?.errors?.[0];
+  if (res.ok && body?.data && !error) return body.data;
+  const status = res.status === 429 ? 429 : Number(error?.status) || res.status;
+  throw new AniListError(
+    error?.message || `AniList responded with HTTP ${res.status}`,
+    status >= 400 && status < 500 ? status : 502,
+  );
+}
+
+export function fetchAniZip(anilistId: number): Promise<any> {
+  return fetchWithRetry(`${ANIZIP_URL}?anilist_id=${anilistId}`, {}, 1, ANIZIP_TIMEOUT_MS)
+    .then((res) => (res.ok ? res.json() : null))
+    .catch(() => null);
+}
+
+export function extractAniZipImages(aniZipData: any) {
+  let banner = "";
+  let logo = "";
+  for (const image of aniZipData?.images ?? []) {
+    if (!banner && image.coverType === "Fanart") banner = image.url;
+    if (!logo && image.coverType === "Clearlogo") logo = image.url;
+  }
+  return { banner, logo };
+}
+
+export function presentMedia(media: any, aniZip?: any) {
+  const { banner, logo } = extractAniZipImages(aniZip);
+  return {
+    title: media.title?.english || media.title?.romaji || "",
+    poster: media.coverImage?.extraLarge || "",
+    banner: banner || media.bannerImage || media.coverImage?.extraLarge || "",
+    logo,
+  };
+}
+
+export function descriptionOf(media: any): string {
+  return media.description?.replace(/<[^>]*>?/gm, "") || "";
+}
+
+export function formatSeason(media: any): string {
+  if (!media.season || !media.seasonYear) return "Unknown";
+  return `${media.season.charAt(0)}${media.season.slice(1).toLowerCase()} ${media.seasonYear}`;
+}
 
 export function formatStatus(status: string | undefined | null): string {
   if (status === "FINISHED") return "Completed";
@@ -8,88 +103,17 @@ export function formatStatus(status: string | undefined | null): string {
 }
 
 export function formatAiringInfo(media: any): { timeLeft: string; episodeCount: string } {
-  let timeLeft = "";
-  let episodeCount: string = media.episodes?.toString() || "NA";
-
-  if (media.nextAiringEpisode) {
-    const seconds: number = media.nextAiringEpisode.timeUntilAiring;
-    const days = Math.floor(seconds / (3600 * 24));
-    const hours = Math.floor((seconds % (3600 * 24)) / 3600);
-    timeLeft = `${days}d ${hours}h`;
-    episodeCount = media.nextAiringEpisode.episode?.toString();
-  }
-
-  return { timeLeft, episodeCount };
-}
-
-export function extractAniZipImages(
-  aniZipData: any,
-  customOverride?: any,
-): { banner: string; logo: string } {
-  let banner: string = customOverride?.banner_image || "";
-  let logo: string = customOverride?.clear_logo || "";
-
-  if (banner && logo) return { banner, logo };
-
-  const images: any[] = aniZipData?.images || [];
-  for (const img of images) {
-    if (img.coverType === "Fanart" && !banner) banner = img.url;
-    if (img.coverType === "Clearlogo" && !logo) logo = img.url;
-    if (banner && logo) break;
-  }
-
-  return { banner, logo };
+  const next = media.nextAiringEpisode;
+  if (!next) return { timeLeft: "", episodeCount: media.episodes?.toString() || "NA" };
+  const days = Math.floor(next.timeUntilAiring / 86_400);
+  const hours = Math.floor((next.timeUntilAiring % 86_400) / 3600);
+  return { timeLeft: `${days}d ${hours}h`, episodeCount: next.episode?.toString() };
 }
 
 export function getSeason(): string {
   const month = new Date().getMonth();
-  if (month >= 0 && month <= 2) return "WINTER";
-  if (month >= 3 && month <= 5) return "SPRING";
-  if (month >= 6 && month <= 8) return "SUMMER";
+  if (month <= 2) return "WINTER";
+  if (month <= 5) return "SPRING";
+  if (month <= 8) return "SUMMER";
   return "FALL";
-}
-
-// ─── Fetch with retry + timeout ───────────────────────────────────────────────
-
-export async function fetchWithRetry(
-  url: string,
-  options: RequestInit = {},
-  retries = 3,
-  timeoutMs = 10_000,
-): Promise<Response> {
-  let lastError: unknown;
-
-  for (let i = 0; i < retries; i++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const res = await fetch(url, {
-        ...options,
-        signal: options.signal || controller.signal,
-      });
-      clearTimeout(timer);
-
-      if (res.status === 429) {
-        console.warn(`[anilist-meta] Rate limited, retrying… (${i + 1}/${retries})`);
-        const retryAfter = res.headers.get("Retry-After");
-        const delayMs = retryAfter && !isNaN(parseInt(retryAfter, 10)) 
-          ? parseInt(retryAfter, 10) * 1000 
-          : 1000 * Math.pow(2, i);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        continue;
-      }
-
-      return res;
-    } catch (err) {
-      clearTimeout(timer);
-      lastError = err;
-      console.warn(`[anilist-meta] Fetch failed (${i + 1}/${retries}):`, (err as Error).message);
-      if (i < retries - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1000 * Math.pow(2, i)));
-      }
-    }
-  }
-
-  throw lastError ?? new Error("Failed to fetch after multiple retries");
 }

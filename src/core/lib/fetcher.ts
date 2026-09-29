@@ -1,112 +1,135 @@
 import { Cache } from "../cache";
 import { Logger } from "../logger";
-import { cf_captcha_status, cf_signatures, getCloudflareClearance } from "./cf-bypass";
+import { getCloudflareClearance } from "./cf-bypass";
+import { browserFetch } from "./impersonate";
 
-type FetchResponse =
-  | {
-      success: boolean;
-      status: number;
-      text: string;
-    }
-  | undefined;
+export type FetchResult = { success: boolean; status: number; text: string };
 
-export type CfBypassCreds = {
-  clearnaceCookieString: string;
-  userAgent: string;
-};
+type CfCredentials = { cookie: string; userAgent: string };
 
-const FALLBACK_CF_COOKIE_TTL = 2 * 3600;
-const CF_BYPASS_MAX_TRY = 3;
+type Attempt = FetchResult & { challenged: boolean };
 
-export const fetcher = async (
-  input: string,
-  detectCfCapcha: boolean,
-  cachePrefix: string = "default",
-  init: RequestInit = {},
-): Promise<FetchResponse> => {
-  try {
-    init = init || {};
-    init.headers = init.headers || {};
+const BLOCKED_STATUSES = [403, 503];
+const CHALLENGE_PAGE = /_cf_chl_opt|<title>Just a moment/i;
+const RATE_LIMIT_RETRY_DELAY = 2_000;
+const CREDENTIALS_FALLBACK_TTL = 2 * 3600;
+const UNSOLVABLE_BACKOFF = 10 * 60_000;
+const CLIENT_HINTS = ["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"];
 
-    if (detectCfCapcha) {
-      const cfCredsRaw: string | undefined | null = await Cache.get(
-        `${cachePrefix}:cf-capcha:creds`,
-      );
+const remembered = new Map<string, { credentials: CfCredentials; expires: number }>();
+const solving = new Map<string, Promise<CfCredentials | null>>();
+const unsolvable = new Map<string, number>();
+const browserTlsHosts = new Set<string>();
 
-      if (cfCredsRaw) {
-        const { clearnaceCookieString, userAgent } = JSON.parse(cfCredsRaw);
+async function loadCredentials(key: string): Promise<CfCredentials | null> {
+  const entry = remembered.get(key);
+  if (entry && entry.expires > Date.now()) return entry.credentials;
+  return Cache.getJson<CfCredentials>(key);
+}
 
-        const headers = init.headers as Record<string, string>;
-        // Use lowercase to standardize for Bun fetch
-        headers["cookie"] = headers["cookie"]
-          ? `${clearnaceCookieString}; ${headers["cookie"]}`
-          : clearnaceCookieString;
-        headers["user-agent"] = userAgent;
-      }
-    }
+function saveCredentials(key: string, credentials: CfCredentials, ttl: number) {
+  remembered.set(key, { credentials, expires: Date.now() + ttl * 1000 });
+  void Cache.setJson(key, credentials, ttl);
+}
 
-    const res = await fetch(input, init);
-    const status = res.status;
-    const text = await res.text();
+function browserHeaders(init: RequestInit, credentials: CfCredentials | null): Headers {
+  const headers = new Headers(init.headers);
+  for (const hint of CLIENT_HINTS) headers.delete(hint);
+  if (!credentials) return headers;
+  const cookie = headers.get("cookie");
+  headers.set("cookie", cookie ? `${credentials.cookie}; ${cookie}` : credentials.cookie);
+  headers.set("user-agent", credentials.userAgent);
+  return headers;
+}
 
-    if (!res.ok) {
-      Logger.warn(`[${cachePrefix}] Failed to fetch url:`, input, "\n", "Status:", status);
+async function request(
+  url: string,
+  init: RequestInit,
+  { browserTls, credentials }: { browserTls: boolean; credentials: CfCredentials | null },
+): Promise<Attempt> {
+  const res = browserTls
+    ? await browserFetch(url, {
+        method: init.method,
+        headers: browserHeaders(init, credentials),
+        body: typeof init.body === "string" ? init.body : undefined,
+      })
+    : await fetch(url, init);
+  const text = await res.text();
+  const challenged =
+    res.headers.get("cf-mitigated") === "challenge" ||
+    (BLOCKED_STATUSES.includes(res.status) && CHALLENGE_PAGE.test(text));
+  return { success: res.ok, status: res.status, text, challenged };
+}
 
-      if (detectCfCapcha && cf_captcha_status.includes(status)) {
-        if (!cf_signatures.some((sig) => text.includes(sig))) {
-          Logger.info("CF capcha not detected!");
-          return;
+function solve(url: string, key: string, label: string): Promise<CfCredentials | null> {
+  if ((unsolvable.get(key) ?? 0) > Date.now()) return Promise.resolve(null);
+  let pending = solving.get(key);
+  if (!pending) {
+    Logger.info(`[${label}] Cloudflare challenge on ${new URL(url).host}, solving in browser`);
+    pending = getCloudflareClearance(url)
+      .then((clearance) => {
+        if (!clearance.success) {
+          unsolvable.set(key, Date.now() + UNSOLVABLE_BACKOFF);
+          return null;
         }
-
-        Logger.info(`[${cachePrefix}] Detected CF Capcha`);
-
-        for (let i = 1; i <= CF_BYPASS_MAX_TRY; ++i) {
-          Logger.info(`[${cachePrefix}] Bypassing CF Capcha - Try ${i}/${CF_BYPASS_MAX_TRY}`);
-
-          const {
-            success,
-            allCookies: _allCookies,
-            cfClearance,
-            userAgent,
-            ttl,
-          } = await getCloudflareClearance(input);
-
-          if (success) {
-            Logger.success(`[${cachePrefix}] Successfully bypassed CF capcha`);
-
-            // Reverted back to your exact format with the semicolon
-            const cookieCf = `cf_clearance=${cfClearance};`;
-            const cfCredsToCache = JSON.stringify({ clearnaceCookieString: cookieCf, userAgent });
-
-            Cache.set(
-              `${cachePrefix}:cf-capcha:creds`,
-              cfCredsToCache,
-              ttl || FALLBACK_CF_COOKIE_TTL,
-            );
-
-            const retryHeaders: Record<string, string> = {
-              ...(init.headers as Record<string, string>),
-              cookie: cfClearance ? cookieCf : "",
-              "user-agent": userAgent || "",
-            };
-
-            const data = await fetcher(input, false, cachePrefix, {
-              ...init,
-              headers: retryHeaders,
-            });
-
-            if (data && data.status >= 200 && data.status <= 299) {
-              return data;
-            }
-          }
-        }
-
-        Logger.error(`[${cachePrefix}] Failed to Bypass CF Capcha - returning`);
-      }
-    }
-
-    return { success: true, status, text };
-  } catch (err: unknown) {
-    Logger.error(`[${cachePrefix}] Error occured while fetching url:`, input, err);
+        const credentials = {
+          cookie: `cf_clearance=${clearance.cfClearance}`,
+          userAgent: clearance.userAgent,
+        };
+        saveCredentials(key, credentials, clearance.ttl || CREDENTIALS_FALLBACK_TTL);
+        return credentials;
+      })
+      .finally(() => solving.delete(key));
+    solving.set(key, pending);
   }
-};
+  return pending;
+}
+
+export async function fetcher(
+  url: string,
+  detectCloudflare: boolean,
+  label = "default",
+  init: RequestInit = {},
+): Promise<FetchResult | undefined> {
+  const key = `${label}:cf-clearance`;
+  const { host } = new URL(url);
+  try {
+    const credentials = detectCloudflare ? await loadCredentials(key) : null;
+    const browserTls = credentials !== null || browserTlsHosts.has(host);
+    const first = await request(url, init, { browserTls, credentials });
+    if (first.success || !detectCloudflare || !BLOCKED_STATUSES.includes(first.status)) {
+      if (!first.success) Logger.warn(`[${label}] HTTP ${first.status} from ${url}`);
+      return first;
+    }
+
+    let last = first;
+    if (credentials && first.challenged) {
+      await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_RETRY_DELAY));
+      last = await request(url, init, { browserTls: true, credentials });
+      if (last.success) return last;
+    } else if (!browserTls) {
+      last = await request(url, init, { browserTls: true, credentials: null });
+      if (last.success) {
+        browserTlsHosts.add(host);
+        return last;
+      }
+    }
+
+    if (!last.challenged) {
+      Logger.warn(`[${label}] HTTP ${last.status} from ${url}`);
+      return last;
+    }
+
+    remembered.delete(key);
+    const cleared = await solve(url, key, label);
+    if (!cleared) {
+      Logger.warn(`[${label}] HTTP ${first.status} from ${url} (Cloudflare challenge unsolved)`);
+      return first;
+    }
+    const retried = await request(url, init, { browserTls: true, credentials: cleared });
+    if (!retried.success) Logger.warn(`[${label}] HTTP ${retried.status} after clearance: ${url}`);
+    return retried;
+  } catch (err) {
+    Logger.warn(`[${label}] Request failed for ${url}: ${(err as Error).message}`);
+  }
+}

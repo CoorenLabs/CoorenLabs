@@ -19,18 +19,35 @@ export interface AnimeSaturnInfo {
   image?: string;
   description?: string;
   genres?: string[];
+  type?: string;
   status?: string;
   totalEpisodes: number;
   episodes: AnimeSaturnEpisode[];
 }
 
 export interface AnimeSaturnSource {
+  server: string;
   url: string;
-  quality: string;
-  isM3U8: boolean;
+  embed: boolean;
+  isM3U8?: boolean;
+  embedUrl?: string;
+  proxiedUrl?: string;
+}
+
+export interface AnimeSaturnDownload {
+  server: string;
+  url: string;
+}
+
+export interface AnimeSaturnStreams {
+  streams: AnimeSaturnSource[];
+  downloads?: AnimeSaturnDownload[];
 }
 
 export interface AnimeSaturnServer {
   name: string;
-  url: string;
+  link: string | null;
+  embed: boolean;
+  download: boolean;
+  downloadUrl: string | null;
 }

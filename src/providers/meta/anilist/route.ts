@@ -1,19 +1,45 @@
 import { Elysia, t } from "elysia";
 import { Cache } from "../../../core/cache";
-import { scrapeHome } from "./scrapers/home";
+import { Logger } from "../../../core/logger";
+import { AniListError } from "./lib/helpers";
 import { scrapeAnimeDetail } from "./scrapers/anime";
+import { scrapeHome } from "./scrapers/home";
 import { scrapeSearch } from "./scrapers/search";
 
-// Cache TTLs
-const HOME_CACHE_TTL = 3600 * 12; // 12hr
-const ANIME_CACHE_TTL = 3600 * 24 * 1; // 1 day(s)
-const SEARCH_CACHE_TTL = 3600 * 6; // 6hr
+const HOME_CACHE_TTL = 3600 * 12;
+const ANIME_CACHE_TTL = 3600 * 24;
+const SEARCH_CACHE_TTL = 3600 * 6;
+const HOME_KEY = "anilist:meta:home";
 
 const prefix = "/meta/anilist";
 
-export const anilistMetaRoutes = new Elysia({ prefix: "/anilist" })
+type Status = { status?: number | string };
 
-  // ── Overview ────────────────────────────────────────────────────────────────
+async function respond<T>(
+  set: Status,
+  key: string,
+  ttl: number,
+  producer: () => Promise<T>,
+  select: (data: T) => unknown = (data) => data,
+) {
+  const started = performance.now();
+  try {
+    const { data, cached } = await Cache.remember(key, ttl, producer);
+    return {
+      success: true,
+      served_cache: cached,
+      took_ms: (performance.now() - started).toFixed(2),
+      data: select(data),
+    };
+  } catch (err) {
+    const status = err instanceof AniListError ? err.status : 500;
+    if (status >= 500) Logger.error(`[anilist-meta] ${key}: ${(err as Error).message}`);
+    set.status = status;
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+export const anilistMetaRoutes = new Elysia({ prefix: "/anilist" })
   .get("/", () => ({
     name: "anilist-meta-api",
     version: "1.0",
@@ -21,70 +47,19 @@ export const anilistMetaRoutes = new Elysia({ prefix: "/anilist" })
       "Meta provider for anime discovery — powered by AniList GraphQL + ani.zip image mappings.",
     endpoints: [
       prefix + "/home                        → Home page (spotlight + sections)",
-      prefix + "/:category                   → Specific home category (e.g. spotlight, recently-added)",
+      prefix +
+        "/:category                   → Specific home category (e.g. spotlight, recently-added)",
       prefix + "/anime/:id                   → Full anime metadata",
       prefix + "/search/:query?page=&perPage= → AniList search",
     ],
   }))
 
-  // ── Home ─────────────────────────────────────────────────────────────────────
-  .get("/home", async () => {
-    const then = performance.now();
+  .get("/home", ({ set }) => respond(set, HOME_KEY, HOME_CACHE_TTL, scrapeHome))
 
-    const cached = await Cache.get("anilist:meta:home");
-    if (cached) {
-      return {
-        success: true,
-        served_cache: true,
-        took_ms: (performance.now() - then).toFixed(2),
-        data: JSON.parse(cached),
-      };
-    }
-
-    try {
-      const data = await scrapeHome();
-      Cache.set("anilist:meta:home", JSON.stringify(data), HOME_CACHE_TTL);
-
-      return {
-        success: true,
-        served_cache: false,
-        took_ms: (performance.now() - then).toFixed(2),
-        data,
-      };
-    } catch (err: any) {
-      console.error("[anilist-meta/home]", err);
-      return { success: false, error: err.message };
-    }
-  })
-
-  // ── Home Categories ──────────────────────────────────────────────────────────
   .get(
     "/:category",
-    async ({ params: { category } }) => {
-      const then = performance.now();
-
-      let homeData;
-      const cached = await Cache.get("anilist:meta:home");
-
-      if (cached) {
-        homeData = JSON.parse(cached);
-      } else {
-        try {
-          homeData = await scrapeHome();
-          Cache.set("anilist:meta:home", JSON.stringify(homeData), HOME_CACHE_TTL);
-        } catch (err: any) {
-          console.error(`[anilist-meta/${category}]`, err);
-          return { success: false, error: err.message };
-        }
-      }
-
-      return {
-        success: true,
-        served_cache: !!cached,
-        took_ms: (performance.now() - then).toFixed(2),
-        data: homeData[category as keyof typeof homeData],
-      };
-    },
+    ({ params: { category }, set }) =>
+      respond(set, HOME_KEY, HOME_CACHE_TTL, scrapeHome, (home) => home[category]),
     {
       params: t.Object({
         category: t.Union([
@@ -102,40 +77,19 @@ export const anilistMetaRoutes = new Elysia({ prefix: "/anilist" })
         summary: "AniList Meta — Home Category",
         description: "Fetch a specific category from the home page.",
       },
-    }
+    },
   )
 
-  // ── Anime Detail ─────────────────────────────────────────────────────────────
   .get(
     "/anime/:id",
-    async ({ params: { id } }) => {
-      const then = performance.now();
-
-      const cacheKey = `anilist:meta:anime:${id}`;
-      const cached = await Cache.get(cacheKey);
-      if (cached) {
-        return {
-          success: true,
-          served_cache: true,
-          took_ms: (performance.now() - then).toFixed(2),
-          data: JSON.parse(cached),
-        };
+    ({ params: { id }, set }) => {
+      if (!/^\d+$/.test(id)) {
+        set.status = 400;
+        return { success: false, error: "Invalid AniList id" };
       }
-
-      try {
-        const data = await scrapeAnimeDetail(id);
-        Cache.set(cacheKey, JSON.stringify(data), ANIME_CACHE_TTL);
-
-        return {
-          success: true,
-          served_cache: false,
-          took_ms: (performance.now() - then).toFixed(2),
-          data,
-        };
-      } catch (err: any) {
-        console.error(`[anilist-meta/anime/${id}]`, err);
-        return { success: false, error: err.message };
-      }
+      return respond(set, `anilist:meta:anime:${id}`, ANIME_CACHE_TTL, () =>
+        scrapeAnimeDetail(Number(id)),
+      );
     },
     {
       params: t.Object({ id: t.String() }),
@@ -148,39 +102,17 @@ export const anilistMetaRoutes = new Elysia({ prefix: "/anilist" })
     },
   )
 
-  // ── Search ───────────────────────────────────────────────────────────────────
   .get(
     "/search/:query",
-    async ({ params: { query }, query: q }) => {
-      const then = performance.now();
+    ({ params: { query }, query: q, set }) => {
       const page = Number(q.page ?? 1);
       const perPage = Number(q.perPage ?? 20);
-
-      const cacheKey = `anilist:meta:search:${query}:${page}:${perPage}`;
-      const cached = await Cache.get(cacheKey);
-      if (cached) {
-        return {
-          success: true,
-          served_cache: true,
-          took_ms: (performance.now() - then).toFixed(2),
-          data: JSON.parse(cached),
-        };
-      }
-
-      try {
-        const data = await scrapeSearch(query, page, perPage);
-        Cache.set(cacheKey, JSON.stringify(data), SEARCH_CACHE_TTL);
-
-        return {
-          success: true,
-          served_cache: false,
-          took_ms: (performance.now() - then).toFixed(2),
-          data,
-        };
-      } catch (err: any) {
-        console.error(`[anilist-meta/search]`, err);
-        return { success: false, error: err.message };
-      }
+      return respond(
+        set,
+        `anilist:meta:search:${query.trim().toLowerCase()}:${page}:${perPage}`,
+        SEARCH_CACHE_TTL,
+        () => scrapeSearch(query, page, perPage),
+      );
     },
     {
       params: t.Object({ query: t.String() }),

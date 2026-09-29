@@ -1,35 +1,24 @@
-import { forgetMedia, getMedia } from "./anilist.js";
+import { PROVIDER_NAMES } from "../providers/index.js";
+import { forgetMedia, getAniZip, mediaOrNull } from "./anilist.js";
+import { background, needsRefresh, read, TTL, write } from "./cache.js";
+import { providerEpisodes } from "./episode-strategy.js";
 import { mapAnimeIds } from "./mapper.js";
-import { buildEpisodesWithCache, buildFilteredEpisodesWithCache } from "./episode-strategy.js";
-import { get, set, getAsync, setAsync, needsRefresh, delAsync, delByPrefixAsync } from "./smartcache.js";
 
-const ANIZIP = "https://api.ani.zip/mappings";
-const MIN = 60_000;
-const HOUR = 60 * MIN;
-const DAY = 24 * HOUR;
-const FULL_TTL = 30 * DAY;
-const NORMAL_PROBE_INTERVAL = 15 * MIN;
-const AIRING_PROBE_INTERVAL = 5 * MIN;
-const AIRING_EARLY_WINDOW = 10 * MIN;
-const AIRING_FAST_WINDOW = 6 * HOUR;
+const FULL_TTL = 30 * TTL.day;
+const NORMAL_PROBE_INTERVAL = 15 * TTL.minute;
+const AIRING_PROBE_INTERVAL = 5 * TTL.minute;
+const AIRING_EARLY_WINDOW = 10 * TTL.minute;
+const AIRING_FAST_WINDOW = 6 * TTL.hour;
 
 const refreshing = new Set();
 
-function runBackground(env, promise) {
-  const waitUntil = env?.context?.waitUntil ?? env?.waitUntil;
-  if (typeof waitUntil === "function") waitUntil.call(env.context ?? env, promise);
-  else promise.catch(() => {});
-}
-
-function latestEpisodeFromResponse(data) {
+function latestEpisode(data) {
   let max = 0;
   for (const provider of Object.values(data ?? {})) {
-    const episodes = provider?.episodes;
-    if (!episodes || typeof episodes !== "object") continue;
-    for (const list of Object.values(episodes)) {
+    for (const list of Object.values(provider?.episodes ?? {})) {
       if (!Array.isArray(list)) continue;
-      for (const ep of list) {
-        const n = Number(ep?.number);
+      for (const episode of list) {
+        const n = Number(episode?.number);
         if (Number.isFinite(n) && n > max) max = n;
       }
     }
@@ -37,51 +26,30 @@ function latestEpisodeFromResponse(data) {
   return max || null;
 }
 
-function hasCurrentProviders(data) {
-  return data &&
-    Object.prototype.hasOwnProperty.call(data, "anidbapp") &&
-    Object.prototype.hasOwnProperty.call(data, "anizone") &&
-    Object.prototype.hasOwnProperty.call(data, "aniwaves") &&
-    Object.prototype.hasOwnProperty.call(data, "animeonsen");
+function failedProviders(data) {
+  return PROVIDER_NAMES.filter((name) => !data?.[name] || data[name].error);
 }
 
-function latestEpisodeFromAniZip(anizip) {
-  const nums = Object.keys(anizip?.episodes ?? {}).map(Number).filter(Number.isFinite);
-  return nums.length ? Math.max(...nums) : null;
-}
-
-function resolveShared(anilistId, freshMedia = false) {
-  if (freshMedia) forgetMedia(anilistId);
-  return Promise.all([
-    getMedia(anilistId).catch(() => null),
-    fetch(`${ANIZIP}?anilist_id=${anilistId}`).then((r) => r.json()).catch(() => null),
-  ]);
-}
-
-async function clearProviderCache(anilistId, media) {
-  for (const p of ["pahe", "manga", "reanime", "anikoto", "animegg", "anineko", "anidbapp", "2dhive", "anizone", "aniwaves", "animeonsen"]) {
-    await delAsync(`epv:${p}:${anilistId}`);
+function latestAniZipEpisode(anizip) {
+  let max = 0;
+  for (const key of Object.keys(anizip?.episodes ?? {})) {
+    const n = Number(key);
+    if (Number.isFinite(n) && n > max) max = n;
   }
-  if (media?.idMal) {
-    await delAsync(`jm:${media.idMal}`);
-    await delByPrefixAsync(`jp:${media.idMal}:`);
-  }
+  return max || null;
 }
 
-async function buildResponse(anilistId, media, anizip, forceRefresh = false) {
-  if (forceRefresh) await clearProviderCache(anilistId, media);
+function resolveShared(anilistId, fresh = false) {
+  if (fresh) forgetMedia(anilistId);
+  return Promise.all([mediaOrNull(anilistId), getAniZip(anilistId, fresh)]);
+}
 
-  const [providerResult, mappingResult] = await Promise.all([
-    buildEpisodesWithCache(anilistId, media, anizip),
+async function buildResponse(anilistId, media, anizip, fresh = false) {
+  const [providers, mapping] = await Promise.all([
+    providerEpisodes(PROVIDER_NAMES, anilistId, media, anizip, { fresh }),
     mapAnimeIds(anilistId).catch(() => null),
   ]);
-
-  return {
-    page: 1,
-    type: "all",
-    mappings: mappingResult?.mappings ?? null,
-    ...providerResult,
-  };
+  return { page: 1, type: "all", mappings: mapping?.mappings ?? null, ...providers };
 }
 
 function probeInterval(state) {
@@ -95,14 +63,9 @@ function probeInterval(state) {
 
 function shouldRebuild(entry, media, anizip) {
   if ((media?.status ?? "RELEASING") === "FINISHED") return false;
-
-  const cachedLatest = latestEpisodeFromResponse(entry?.data) ?? 0;
-  const knownLatest = Math.max(
-    latestEpisodeFromAniZip(anizip) ?? 0,
-    Number(media?.episodes) || 0
-  );
+  const cachedLatest = latestEpisode(entry?.data) ?? 0;
+  const knownLatest = Math.max(latestAniZipEpisode(anizip) ?? 0, Number(media?.episodes) || 0);
   if (knownLatest > cachedLatest) return true;
-
   const next = media?.nextAiringEpisode;
   if (next?.episode && cachedLatest >= Number(next.episode)) return false;
   if (next?.airingAt) {
@@ -111,104 +74,89 @@ function shouldRebuild(entry, media, anizip) {
     if (now < airMs - AIRING_EARLY_WINDOW) return false;
     if (now <= airMs + AIRING_FAST_WINDOW) return true;
   }
-
   return needsRefresh(entry);
 }
 
-function writeSyncState(anilistId, state, ttl = FULL_TTL) {
-  set(`sync:${anilistId}`, state, ttl, NORMAL_PROBE_INTERVAL);
-}
-
-function scheduleRefresh(anilistId, entry, env) {
-  const key = `ep-bg:${anilistId}`;
-  if (refreshing.has(key)) return;
-
-  const syncKey = `sync:${anilistId}`;
-  const oldState = get(syncKey)?.data;
-  const now = Date.now();
-  if (oldState?.lastProbeAt && now - oldState.lastProbeAt < probeInterval(oldState)) return;
-
-  refreshing.add(key);
-  writeSyncState(anilistId, { ...oldState, lastProbeAt: now, syncing: true });
-
-  const task = (async () => {
-    const [media, anizip] = await resolveShared(anilistId, true);
-    const cachedLatest = latestEpisodeFromResponse(entry?.data);
-    const next = media?.nextAiringEpisode ?? null;
-
-    if (!shouldRebuild(entry, media, anizip)) {
-      writeSyncState(anilistId, {
-        lastProbeAt: Date.now(),
-        lastSyncAt: oldState?.lastSyncAt ?? null,
-        latestEpisode: cachedLatest,
-        nextEpisode: next?.episode ?? null,
-        nextAiringAt: next?.airingAt ?? null,
-        syncing: false,
-      });
-      return;
-    }
-
-    const result = await buildResponse(anilistId, media, anizip, true);
-    const latestEpisode = latestEpisodeFromResponse(result);
-    await setAsync(`episodes:${anilistId}`, result, FULL_TTL, NORMAL_PROBE_INTERVAL);
-    writeSyncState(anilistId, {
-      lastProbeAt: Date.now(),
-      lastSyncAt: Date.now(),
-      latestEpisode,
-      nextEpisode: next?.episode ?? null,
-      nextAiringAt: next?.airingAt ?? null,
-      syncing: false,
-    });
-  })()
-    .catch((e) => {
-      console.error(`[ep-bg:${anilistId}]`, e.message);
-      writeSyncState(anilistId, {
-        ...oldState,
-        lastProbeAt: Date.now(),
-        syncing: false,
-        error: e.message,
-      }, HOUR);
-    })
-    .finally(() => refreshing.delete(key));
-
-  runBackground(env, task);
-}
-
-export async function getEpisodesResponse(anilistId, env) {
-  const cacheKey = `episodes:${anilistId}`;
-  const entry = await getAsync(cacheKey);
-
-  if (entry && hasCurrentProviders(entry.data)) {
-    scheduleRefresh(anilistId, entry, env);
-    return entry.data;
-  }
-
-  const [media, anizip] = await resolveShared(anilistId);
-  const result = await buildResponse(anilistId, media, anizip);
-  await setAsync(cacheKey, result, FULL_TTL, NORMAL_PROBE_INTERVAL);
-  writeSyncState(anilistId, {
+function syncState(data, media, previous = {}) {
+  return {
     lastProbeAt: Date.now(),
-    lastSyncAt: Date.now(),
-    latestEpisode: latestEpisodeFromResponse(result),
+    lastSyncAt: data ? Date.now() : (previous.lastSyncAt ?? null),
+    latestEpisode: latestEpisode(data ?? previous.data),
     nextEpisode: media?.nextAiringEpisode?.episode ?? null,
     nextAiringAt: media?.nextAiringEpisode?.airingAt ?? null,
     syncing: false,
+  };
+}
+
+async function scheduleRefresh(anilistId, entry) {
+  if (refreshing.has(anilistId)) return;
+  const syncKey = `sync:${anilistId}`;
+  const previous = (await read(syncKey))?.data;
+  if (previous?.lastProbeAt && Date.now() - previous.lastProbeAt < probeInterval(previous)) return;
+  refreshing.add(anilistId);
+  write(
+    syncKey,
+    { ...previous, lastProbeAt: Date.now(), syncing: true },
+    FULL_TTL,
+    NORMAL_PROBE_INTERVAL,
+  );
+  background(`episodes refresh ${anilistId}`, async () => {
+    try {
+      const [media, anizip] = await resolveShared(anilistId, true);
+      let data = null;
+      if (shouldRebuild(entry, media, anizip))
+        data = await buildResponse(anilistId, media, anizip, true);
+      else if (failedProviders(entry.data).length)
+        data = {
+          ...entry.data,
+          ...(await providerEpisodes(failedProviders(entry.data), anilistId, media, anizip, {
+            fresh: true,
+          })),
+        };
+      if (data) write(`episodes:${anilistId}`, data, FULL_TTL, NORMAL_PROBE_INTERVAL);
+      write(
+        syncKey,
+        syncState(data, media, { ...previous, data: entry.data }),
+        FULL_TTL,
+        NORMAL_PROBE_INTERVAL,
+      );
+    } catch (error) {
+      write(
+        syncKey,
+        { ...previous, lastProbeAt: Date.now(), syncing: false, error: error.message },
+        TTL.hour,
+      );
+      throw error;
+    } finally {
+      refreshing.delete(anilistId);
+    }
   });
+}
+
+export async function getEpisodesResponse(anilistId) {
+  const key = `episodes:${anilistId}`;
+  const entry = await read(key);
+  if (entry && failedProviders(entry.data).length < PROVIDER_NAMES.length) {
+    await scheduleRefresh(anilistId, entry);
+    return entry.data;
+  }
+  const [media, anizip] = await resolveShared(anilistId);
+  const result = await buildResponse(anilistId, media, anizip);
+  write(key, result, FULL_TTL, NORMAL_PROBE_INTERVAL);
+  write(`sync:${anilistId}`, syncState(result, media), FULL_TTL, NORMAL_PROBE_INTERVAL);
   return result;
 }
 
 export async function getFilteredEpisodesResponse(anilistId, providers, includeMap) {
   const [media, anizip] = await resolveShared(anilistId);
-
-  const [providerResult, mappingResult] = await Promise.all([
-    buildFilteredEpisodesWithCache(anilistId, providers, media, anizip),
-    includeMap ? mapAnimeIds(anilistId).catch(() => null) : Promise.resolve(null),
+  const [data, mapping] = await Promise.all([
+    providerEpisodes(providers, anilistId, media, anizip),
+    includeMap ? mapAnimeIds(anilistId).catch(() => null) : null,
   ]);
-
   return {
     page: 1,
     type: "filtered",
-    ...(includeMap ? { mappings: mappingResult?.mappings ?? null } : {}),
-    ...providerResult,
+    ...(includeMap ? { mappings: mapping?.mappings ?? null } : {}),
+    ...data,
   };
 }
