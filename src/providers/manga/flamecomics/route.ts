@@ -1,62 +1,33 @@
-import { Elysia, t } from "elysia";
+import { Elysia } from "elysia";
+import { required, respond } from "../shared";
 import { flamecomics } from "./flamecomics";
+
+const doc = (summary: string) => ({ detail: { tags: ["manga"], summary } });
 
 export const flamecomicsRoutes = new Elysia({ prefix: "/flamecomics" })
   .get(
+    "/",
+    () => ({
+      provider: "FlameComics",
+      status: "operational",
+      description:
+        "Flame Comics is a scanlation group publishing English translations of manhwa, manhua and manga, with a catalogue of popular action and fantasy series updated weekly.",
+      message: "FlameComics provider is running. Visit /docs for available endpoints.",
+    }),
+    doc("FlameComics Status"),
+  )
+  .get(
     "/search",
-    async ({ query }) => {
-      return await flamecomics.search(query.q as string);
-    },
-    {
-      query: t.Object({
-        q: t.String(),
-      }),
-      detail: {
-        tags: ["manga"],
-        summary: "FlameComics Search",
-        description: "Search for manga by keyword.",
-      },
-    },
+    ({ query, set }) => respond(set, () => flamecomics.search(required(query.q?.trim(), "q"))),
+    doc("FlameComics Search (?q=query)"),
   )
   .get(
     "/detail/:id",
-    async ({ params }) => {
-      return await flamecomics.getMangaDetail(params.id);
-    },
-    {
-      params: t.Object({
-        id: t.String({ description: "Series ID (numeric, e.g., 1)" }),
-      }),
-      detail: {
-        tags: ["manga"],
-        summary: "FlameComics Detail & Chapters",
-        description:
-          "Returns metadata and full chapter list for a series. Each chapter includes a `token` field — use that as the `token` param in the /read endpoint.",
-      },
-    },
+    ({ params, set }) => respond(set, () => flamecomics.detail(params.id)),
+    doc("FlameComics Series Details and Chapter List"),
   )
   .get(
     "/read/:mangaId/:token",
-    async ({ params, set }) => {
-      const result = await flamecomics.getMangaChapter(params.mangaId, params.token);
-      if (!result) {
-        set.status = 404;
-        return { message: "Chapter not found" };
-      }
-      return result;
-    },
-    {
-      params: t.Object({
-        mangaId: t.String({ description: "Series ID (numeric, e.g., 1)" }),
-        token: t.String({
-          description: "Chapter token from the detail endpoint chapters list (e.g., chapter-1)",
-        }),
-      }),
-      detail: {
-        tags: ["manga"],
-        summary: "FlameComics Read Chapter",
-        description:
-          "Returns chapter images and navigation. The `images` array contains direct CDN URLs ready for display.",
-      },
-    },
+    ({ params, set }) => respond(set, () => flamecomics.read(params.mangaId, params.token)),
+    doc("FlameComics Read Chapter (mangaId + chapter token from detail)"),
   );

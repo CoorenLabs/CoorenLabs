@@ -1,16 +1,16 @@
 export interface FlameComicsSeries {
-  series_id: string;
+  id: string;
   title: string;
   cover: string | null;
-  status: string | null;
   type: string | null;
+  status: string | null;
   url: string;
 }
 
 export interface FlameComicsChapter {
-  chapter_id: string;
-  chapter: string;
-  title: string;
+  id: string;
+  number: number;
+  title: string | null;
   token: string;
   releaseDate: string | null;
   url: string;
@@ -19,7 +19,22 @@ export interface FlameComicsChapter {
 export interface FlameComicsMangaDetail extends FlameComicsSeries {
   description: string | null;
   altTitles: string[];
-  tags: string[];
-  author: string[];
+  genres: string[];
+  authors: string[];
+  artists: string[];
+  year: number | null;
   chapters: FlameComicsChapter[];
+}
+
+export interface FlameComicsChapterPages {
+  id: string;
+  mangaId: string;
+  mangaTitle: string | null;
+  number: number;
+  title: string | null;
+  token: string;
+  releaseDate: string | null;
+  images: string[];
+  prevToken: string | null;
+  nextToken: string | null;
 }

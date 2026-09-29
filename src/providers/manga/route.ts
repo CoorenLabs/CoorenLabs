@@ -94,6 +94,7 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
             "GET /manga/mangapill/search               → Search by keyword (?q=query)",
             "GET /manga/mangapill/detail/:id           → Manga details & chapters list (with chapterId per chapter)",
             "GET /manga/mangapill/read/:chapterId      → Chapter images (use chapterId from detail)",
+            "GET /manga/mangapill/image/* → Image proxy for bypass",
           ],
         },
       };

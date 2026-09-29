@@ -1,6 +1,6 @@
 export const animepahe = "https://animepahe.pw";
 export const toonstream = "https://toonstream.us";
-export const animesaturn = "https://www.animesaturn.cx";
+export const animesaturn = "https://www.animesaturn.net";
 export const animeunity = "https://www.animeunity.so";
 export const animelok = "https://animelok.cc";
 

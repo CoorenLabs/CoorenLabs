@@ -1,11 +1,13 @@
 import { SERVER_ORIGIN } from "../../core/config";
 import { Logger } from "../../core/logger";
+import { isAllowed } from "../../core/proxyRoutes";
 
 export const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
 
 const TIMEOUT = 15_000;
 const IMAGE_TIMEOUT = 30_000;
+const MAX_IMAGE_REDIRECTS = 3;
 const HOSTNAME = /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i;
 const IMAGE_TYPE = /^(?:image\/(?!svg)|(?:application|binary)\/octet-stream)/i;
 const EXTENSION_TYPES: Record<string, string> = {
@@ -85,6 +87,10 @@ export function imageUrl(provider: string, url: string) {
   return `${SERVER_ORIGIN}/manga/${provider}/image/${url.replace(/^https?:\/\//, "")}`;
 }
 
+function text(body: string, status: number) {
+  return new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+}
+
 export async function proxyImage(
   req: Request,
   referer: string,
@@ -95,19 +101,28 @@ export async function proxyImage(
   try {
     target = new URL(`https://${pathname.slice(pathname.indexOf("/image/") + 7)}${search}`);
   } catch {
-    return new Response("Invalid image URL", { status: 400 });
+    return text("Invalid image URL", 400);
   }
-  if (!HOSTNAME.test(target.hostname)) return new Response("Invalid image host", { status: 400 });
+  if (!HOSTNAME.test(target.hostname)) return text("Invalid image host", 400);
   rewrite?.(target);
 
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(IMAGE_TIMEOUT)]);
   let res: Response;
   try {
-    res = await fetch(target, {
-      headers: { Referer: referer, Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8" },
-      signal: AbortSignal.any([req.signal, AbortSignal.timeout(IMAGE_TIMEOUT)]),
-    });
+    for (let hop = 0; ; hop++) {
+      if (!(await isAllowed(target))) return text("Forbidden image host", 403);
+      res = await fetch(target, {
+        headers: { Referer: referer, Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8" },
+        redirect: "manual",
+        signal,
+      });
+      const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+      if (!location || hop === MAX_IMAGE_REDIRECTS) break;
+      void res.body?.cancel();
+      target = new URL(location, target);
+    }
   } catch {
-    return new Response("Image unavailable", { status: 502 });
+    return text("Image unavailable", 502);
   }
 
   const extension = target.pathname.split(".").pop()?.toLowerCase() ?? "";
@@ -115,7 +130,7 @@ export async function proxyImage(
     res.headers.get("content-type") || EXTENSION_TYPES[extension] || "application/octet-stream";
   if (!res.ok || !IMAGE_TYPE.test(type)) {
     void res.body?.cancel();
-    return new Response("Image unavailable", { status: res.ok ? 502 : res.status });
+    return text("Image unavailable", res.ok ? 502 : res.status);
   }
 
   const headers = new Headers({
